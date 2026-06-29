@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.env
+data/jobs/*.json
+data/jobs/*.db
+tracker/*.db
+.DS_Store
+*.egg-info/
+dist/
+build/

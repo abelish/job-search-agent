@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Job Search Dashboard</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222534;
+    --border: #2e3148;
+    --text: #e2e4ef;
+    --muted: #7b7f9e;
+    --accent: #6c63ff;
+    --accent-dim: #3d3980;
+    --green: #3ecf8e;
+    --yellow: #f5a623;
+    --red: #f56060;
+    --blue: #5ab4f5;
+  }
+
+  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; }
+
+  /* Layout */
+  #app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+
+  nav {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  nav h1 { font-size: 13px; font-weight: 700; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; padding: 0 20px 12px; }
+  nav button {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    text-align: left; padding: 9px 20px; font-size: 14px; border-radius: 0;
+    transition: color .15s, background .15s;
+  }
+  nav button:hover { color: var(--text); background: var(--surface2); }
+  nav button.active { color: var(--accent); background: var(--accent-dim); }
+
+  main { padding: 32px; overflow-y: auto; }
+
+  /* Views */
+  .view { display: none; }
+  .view.active { display: block; }
+
+  h2 { font-size: 20px; font-weight: 600; margin-bottom: 20px; }
+
+  /* Pipeline cards */
+  .pipeline { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; margin-bottom: 32px; }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-card .count { font-size: 32px; font-weight: 700; color: var(--accent); }
+  .stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
+
+  /* Jobs table */
+  .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .filter-btn {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 20px; padding: 4px 14px; cursor: pointer; font-size: 12px; transition: all .15s;
+  }
+  .filter-btn.active, .filter-btn:hover { background: var(--accent-dim); border-color: var(--accent); color: var(--text); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:hover td { background: var(--surface); }
+  tr.clickable { cursor: pointer; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .badge-new        { background: #1e2a3a; color: var(--blue); }
+  .badge-dismissed  { background: #1e1e1e; color: var(--muted); }
+  .badge-scored     { background: #2a2a1a; color: var(--yellow); }
+  .badge-drafted    { background: #1a2a2a; color: var(--green); }
+  .badge-submitted  { background: #2a1e2a; color: #c084fc; }
+  .badge-interviewing { background: #1a2a1e; color: var(--green); }
+  .badge-rejected   { background: #2a1a1a; color: var(--red); }
+  .badge-offer      { background: #1a2a1a; color: var(--green); }
+
+  .posting-link {
+    color: var(--muted); text-decoration: none; font-size: 13px;
+    transition: color .15s; display: inline-block; padding: 0 4px;
+  }
+  .posting-link:hover { color: var(--accent); }
+
+  .btn-dismiss {
+    background: none; border: 1px solid transparent; color: var(--muted);
+    border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 11px;
+    transition: all .15s; white-space: nowrap;
+  }
+  .btn-dismiss:hover { border-color: var(--red); color: var(--red); }
+
+  .source-tag {
+    display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+    background: var(--surface2); color: var(--muted); border: 1px solid var(--border);
+  }
+
+  .score { font-weight: 700; }
+  .score.hi { color: var(--green); }
+  .score.mid { color: var(--yellow); }
+  .score.lo { color: var(--red); }
+
+  /* Job detail */
+  #detail-back { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; margin-bottom: 16px; padding: 0; }
+  #detail-back:hover { text-decoration: underline; }
+
+  .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+  .detail-header-left h2 { margin-bottom: 4px; }
+  .detail-meta { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+  .detail-meta a { color: var(--accent); text-decoration: none; }
+  .detail-meta a:hover { text-decoration: underline; }
+
+  .status-select {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+  }
+
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .detail-grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  .panel-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .panel-body { padding: 16px; flex: 1; overflow-y: auto; }
+
+  .prose { white-space: pre-wrap; line-height: 1.7; font-size: 13px; color: var(--text); }
+
+  textarea.draft-edit {
+    width: 100%; background: transparent; border: none; color: var(--text);
+    font-family: inherit; font-size: 13px; line-height: 1.7; resize: none;
+    outline: none; min-height: 400px;
+  }
+
+  .btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 6px 14px; cursor: pointer; font-size: 12px; font-weight: 600;
+    transition: opacity .15s;
+  }
+  .btn:hover:not(:disabled) { opacity: .85; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-ghost {
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 12px;
+    transition: all .15s;
+  }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+  .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-danger {
+    background: var(--red); color: #fff; border: none; border-radius: 6px;
+    padding: 6px 14px; cursor: pointer; font-size: 12px; font-weight: 600;
+    transition: opacity .15s;
+  }
+  .btn-danger:hover { opacity: .85; }
+  .save-indicator { font-size: 11px; color: var(--green); display: none; margin-left: 8px; }
+
+  .score-block { background: var(--surface2); border-radius: 6px; padding: 12px 14px; margin-bottom: 16px; }
+  .score-block .score-num { font-size: 28px; font-weight: 700; }
+  .score-block .score-rationale { margin-top: 8px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+  /* Action bar */
+  .action-bar {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px; margin-bottom: 20px;
+  }
+  .action-bar-label { font-size: 12px; color: var(--muted); flex: 1; }
+
+  /* Pipeline action row */
+  .pipeline-actions {
+    display: flex; gap: 10px; align-items: center; margin-bottom: 24px; flex-wrap: wrap;
+  }
+  .pipeline-actions .action-hint {
+    font-size: 12px; color: var(--muted); margin-left: 4px;
+  }
+
+  /* Scoring progress bar */
+  .score-progress {
+    display: none; align-items: center; gap: 12px; flex: 1;
+  }
+  .score-progress.active { display: flex; }
+  .score-progress-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .score-progress-track {
+    flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; min-width: 80px;
+  }
+  .score-progress-fill {
+    height: 100%; background: var(--accent); border-radius: 3px;
+    width: 0%; transition: width .4s ease;
+  }
+
+  /* Activity feed */
+  .activity-list { display: flex; flex-direction: column; gap: 0; }
+  .activity-item {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 12px 0; border-bottom: 1px solid var(--border);
+  }
+  .activity-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 4px;
+  }
+  .dot-status_change { background: var(--accent); }
+  .dot-draft_generated { background: var(--green); }
+  .dot-scan_run { background: var(--yellow); }
+  .dot-score_run { background: var(--blue); }
+  .dot-prep_generated { background: #c084fc; }
+
+  .activity-body { flex: 1; }
+  .activity-body strong { font-weight: 600; }
+  .activity-time { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Empty state */
+  .empty { color: var(--muted); text-align: center; padding: 40px; font-size: 13px; }
+  .empty code { font-family: monospace; background: var(--surface2); padding: 2px 6px; border-radius: 4px; }
+
+  /* Budget widget */
+  .budget-widget {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 32px;
+  }
+  .budget-widget-header {
+    display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;
+  }
+  .budget-widget-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .budget-widget-month { font-size: 12px; color: var(--muted); }
+  .budget-bar-track {
+    height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; margin-bottom: 10px;
+  }
+  .budget-bar-fill {
+    height: 100%; border-radius: 3px; transition: width .4s ease;
+    background: var(--green);
+  }
+  .budget-bar-fill.warn { background: var(--yellow); }
+  .budget-bar-fill.danger { background: var(--red); }
+  .budget-numbers {
+    display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px;
+  }
+  .budget-spent { font-weight: 600; }
+  .budget-remaining { color: var(--muted); }
+  .budget-tokens { font-size: 11px; color: var(--muted); }
+
+  /* Activity token inline */
+  .activity-tokens { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Scan warnings */
+  .warning-banner {
+    background: #2a1f0a; border: 1px solid #6b4c10; border-radius: 8px;
+    padding: 12px 16px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .warning-banner-title {
+    font-size: 12px; font-weight: 700; color: var(--yellow);
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: 2px;
+  }
+  .warning-item { font-size: 12px; color: #d4a843; display: flex; gap: 8px; }
+  .warning-item::before { content: "⚠"; flex-shrink: 0; }
+
+  /* Toast */
+  #toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); padding: 10px 18px; border-radius: 8px;
+    font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none;
+    z-index: 100;
+  }
+  #toast.show { opacity: 1; }
+  #toast.error { border-color: var(--red); color: var(--red); }
+
+  /* Modal */
+  #modal {
+    display: none; position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,.6); align-items: center; justify-content: center;
+  }
+  #modal.open { display: flex; }
+  #modal-box {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 28px 32px; max-width: 480px; width: 90%; display: flex; flex-direction: column; gap: 16px;
+  }
+  #modal-title { font-size: 16px; font-weight: 700; }
+  #modal-body { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  #modal-cost {
+    background: var(--surface2); border-radius: 6px; padding: 10px 14px;
+    font-size: 13px; display: none;
+  }
+  #modal-cost .cost-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+  #modal-cost .cost-value { font-size: 18px; font-weight: 700; color: var(--yellow); }
+  #modal-cost .cost-note { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  #modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+  /* Loading overlay */
+  #loading {
+    display: none; position: fixed; inset: 0; z-index: 300;
+    background: rgba(0,0,0,.5); align-items: center; justify-content: center;
+    flex-direction: column; gap: 16px;
+  }
+  #loading.open { display: flex; }
+  .spinner {
+    width: 36px; height: 36px; border: 3px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading-msg { color: var(--text); font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <nav>
+    <h1>Job Search</h1>
+    <button class="active" data-view="pipeline">Pipeline</button>
+    <button data-view="jobs">All Jobs</button>
+    <button data-view="activity">Activity</button>
+  </nav>
+
+  <main>
+    <!-- Pipeline view -->
+    <div id="view-pipeline" class="view active">
+      <h2>Pipeline</h2>
+
+      <div class="pipeline-actions">
+        <button class="btn-ghost" id="btn-scan">Scan for new jobs</button>
+        <span class="action-hint" id="last-scan-hint"></span>
+        <button class="btn" id="btn-score" disabled>Score new jobs</button>
+        <span class="action-hint" id="score-hint"></span>
+        <div class="score-progress" id="score-progress">
+          <span class="score-progress-label" id="score-progress-label">Scoring 0 / 0</span>
+          <div class="score-progress-track">
+            <div class="score-progress-fill" id="score-progress-fill"></div>
+          </div>
+          <button class="btn-ghost" id="btn-stop-score" style="white-space:nowrap;">Stop</button>
+        </div>
+      </div>
+      <div id="scan-warnings" style="display:none; margin-bottom:20px;"></div>
+
+      <div class="pipeline" id="stats-grid"></div>
+      <div class="budget-widget" id="budget-widget" style="display:none">
+        <div class="budget-widget-header">
+          <span class="budget-widget-title">Claude API Usage</span>
+          <span class="budget-widget-month" id="budget-month"></span>
+        </div>
+        <div class="budget-bar-track"><div class="budget-bar-fill" id="budget-bar"></div></div>
+        <div class="budget-numbers">
+          <span class="budget-spent" id="budget-spent"></span>
+          <span class="budget-remaining" id="budget-remaining"></span>
+        </div>
+        <div class="budget-tokens" id="budget-tokens"></div>
+      </div>
+      <h2 style="font-size:16px; margin-bottom:12px;">Recent</h2>
+      <div id="recent-jobs"></div>
+    </div>
+
+    <!-- All jobs view -->
+    <div id="view-jobs" class="view">
+      <h2>All Jobs</h2>
+      <div class="filters" id="status-filters">
+        <button class="filter-btn active" data-status="">All</button>
+        <button class="filter-btn" data-status="new">New</button>
+        <button class="filter-btn" data-status="dismissed">Dismissed</button>
+        <button class="filter-btn" data-status="scored">Scored</button>
+        <button class="filter-btn" data-status="drafted">Drafted</button>
+        <button class="filter-btn" data-status="submitted">Submitted</button>
+        <button class="filter-btn" data-status="interviewing">Interviewing</button>
+        <button class="filter-btn" data-status="rejected">Rejected</button>
+        <button class="filter-btn" data-status="offer">Offer</button>
+      </div>
+      <div id="jobs-table"></div>
+    </div>
+
+    <!-- Job detail view -->
+    <div id="view-detail" class="view">
+      <button id="detail-back">← Back</button>
+      <div id="detail-content"></div>
+    </div>
+
+    <!-- Activity view -->
+    <div id="view-activity" class="view">
+      <h2>Activity</h2>
+      <div id="activity-list"></div>
+    </div>
+  </main>
+</div>
+
+<!-- Modal -->
+<div id="modal">
+  <div id="modal-box">
+    <div id="modal-title"></div>
+    <div id="modal-body"></div>
+    <div id="modal-cost">
+      <div class="cost-label">Estimated Claude API cost</div>
+      <div class="cost-value" id="modal-cost-value"></div>
+      <div class="cost-note" id="modal-cost-note"></div>
+    </div>
+    <div id="modal-actions">
+      <button class="btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn" id="modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading overlay -->
+<div id="loading">
+  <div class="spinner"></div>
+  <div id="loading-msg">Working...</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const STATUS_ORDER = ['new','dismissed','scored','drafted','submitted','interviewing','rejected','offer'];
+
+// Prices per million tokens matching tracker/_PRICING
+const TOKEN_PRICES = {
+  'claude-sonnet-4-6': { input: 3.00, output: 15.00 },
+  'claude-haiku-4-5-20251001': { input: 1.00, output: 5.00 },
+  'claude-opus-4-8': { input: 5.00, output: 25.00 },
+};
+
+// Estimated tokens per action (approximate, for user-facing cost previews)
+const COST_EST = {
+  draft: { in: 4000, out: 1500, model: 'claude-sonnet-4-6' },  // resume + cover letter
+  prep:  { in: 3000, out:  800, model: 'claude-sonnet-4-6' },
+};
+
+// --- navigation ---
+let currentView = 'pipeline';
+let previousView = 'pipeline';
+
+function showView(name, { reload = true } = {}) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  const btn = document.querySelector(`nav button[data-view="${name}"]`);
+  if (btn) btn.classList.add('active');
+  currentView = name;
+  if (!reload) return;
+  if (name === 'pipeline') loadPipeline();
+  else if (name === 'jobs') loadJobs();
+  else if (name === 'activity') loadActivity();
+}
+
+document.querySelectorAll('nav button[data-view]').forEach(btn => {
+  btn.addEventListener('click', () => showView(btn.dataset.view));
+});
+
+// --- toast ---
+function toast(msg, opts = {}) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = opts.error ? 'show error' : 'show';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.className = '', opts.duration || 3000);
+}
+
+// --- loading overlay ---
+function showLoading(msg) {
+  document.getElementById('loading-msg').textContent = msg || 'Working...';
+  document.getElementById('loading').classList.add('open');
+}
+function hideLoading() {
+  document.getElementById('loading').classList.remove('open');
+}
+
+// --- modal ---
+let _modalResolve = null;
+function showModal({ title, body, cost, costNote, confirmLabel = 'Confirm', danger = false }) {
+  return new Promise(resolve => {
+    _modalResolve = resolve;
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-body').textContent = body;
+    const costEl = document.getElementById('modal-cost');
+    if (cost != null) {
+      document.getElementById('modal-cost-value').textContent = cost;
+      document.getElementById('modal-cost-note').textContent = costNote || '';
+      costEl.style.display = '';
+    } else {
+      costEl.style.display = 'none';
+    }
+    const confirmBtn = document.getElementById('modal-confirm');
+    confirmBtn.textContent = confirmLabel;
+    confirmBtn.className = danger ? 'btn-danger' : 'btn';
+    document.getElementById('modal').classList.add('open');
+  });
+}
+document.getElementById('modal-cancel').addEventListener('click', () => {
+  document.getElementById('modal').classList.remove('open');
+  if (_modalResolve) { _modalResolve(false); _modalResolve = null; }
+});
+document.getElementById('modal-confirm').addEventListener('click', () => {
+  document.getElementById('modal').classList.remove('open');
+  if (_modalResolve) { _modalResolve(true); _modalResolve = null; }
+});
+
+// --- api helpers ---
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try { detail = JSON.parse(text).detail || text; } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+function tokenCost(model, inputTok, outputTok) {
+  const p = TOKEN_PRICES[model] || TOKEN_PRICES['claude-sonnet-4-6'];
+  return (inputTok / 1_000_000 * p.input) + (outputTok / 1_000_000 * p.output);
+}
+
+function fmtCost(usd) {
+  return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
+}
+
+function estCost(key) {
+  const e = COST_EST[key];
+  return fmtCost(tokenCost(e.model, e.in, e.out));
+}
+
+// --- formatting ---
+function badge(status) {
+  return `<span class="badge badge-${status}">${status}</span>`;
+}
+
+function scoreEl(score) {
+  if (score == null || score === 0) return '<span style="color:var(--muted)">—</span>';
+  const cls = score >= 75 ? 'hi' : score >= 50 ? 'mid' : 'lo';
+  return `<span class="score ${cls}">${score}</span>`;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function fmtTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
+    d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function esc(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+const SOURCE_LABELS = {
+  greenhouse:      'Greenhouse',
+  lever:           'Lever',
+  ashby:           'Ashby',
+  linkedin_email:  'LinkedIn',
+  indeed_email:    'Indeed',
+  smartrecruiters: 'SmartRecruiters',
+  arbeitsagentur:  'Bundesagentur',
+};
+
+function sourceTag(source) {
+  const label = SOURCE_LABELS[source] || (source || 'Unknown');
+  return `<span class="source-tag">${esc(label)}</span>`;
+}
+
+function jobsTable(jobs, clickable = true) {
+  if (!jobs.length) return '<div class="empty">No jobs found.</div>';
+  const hasNew = jobs.some(j => j.status === 'new');
+  return `<table>
+    <thead><tr>
+      <th>Company</th><th>Title</th><th>Location</th><th>Source</th><th>Score</th><th>Status</th><th>Updated</th><th></th>
+      ${hasNew ? '<th></th>' : ''}
+    </tr></thead>
+    <tbody>
+      ${jobs.map(j => `
+        <tr class="${clickable ? 'clickable' : ''}" data-id="${j.id}">
+          <td>${esc(j.company || '—')}</td>
+          <td>${esc(j.title || '—')}</td>
+          <td>${esc(j.location || '—')}</td>
+          <td>${sourceTag(j.source)}</td>
+          <td>${scoreEl(j.fit_score)}</td>
+          <td>${badge(j.status)}</td>
+          <td>${fmtDate(j.last_updated)}</td>
+          <td>${j.url ? `<a class="posting-link" href="${esc(j.url)}" target="_blank" rel="noopener" title="View posting">↗</a>` : ''}</td>
+          ${hasNew ? `<td><button class="btn-dismiss${j.status === 'new' ? ' dismiss-btn' : ''}" data-id="${j.id}" ${j.status !== 'new' ? 'style="visibility:hidden"' : ''}>Dismiss</button></td>` : ''}
+        </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+// --- pipeline view ---
+async function loadPipeline() {
+  const [stats, jobs, activity] = await Promise.all([
+    api('/api/stats'),
+    api('/api/jobs'),
+    api('/api/activity?limit=200'),
+  ]);
+  const grid = document.getElementById('stats-grid');
+  grid.innerHTML = STATUS_ORDER.map(s =>
+    `<div class="stat-card"><div class="count">${stats[s] || 0}</div><div class="label">${s}</div></div>`
+  ).join('');
+
+  const recent = jobs.slice(0, 10);
+  const el = document.getElementById('recent-jobs');
+  el.innerHTML = jobsTable(recent);
+  el.querySelectorAll('tr.clickable').forEach(tr =>
+    tr.addEventListener('click', e => {
+      if (e.target.closest('.dismiss-btn') || e.target.closest('.posting-link')) return;
+      openDetail(tr.dataset.id);
+    })
+  );
+
+  const lastScan = activity.find(a => a.event_type === 'scan_run');
+  const scanHint = document.getElementById('last-scan-hint');
+  scanHint.textContent = lastScan ? `· last scanned ${fmtTime(lastScan.created_at)}` : '· never scanned';
+
+  await refreshScoreButton();
+
+  try {
+    const tokenData = await api('/api/token-summary');
+    renderBudgetWidget(tokenData);
+  } catch {
+    document.getElementById('budget-widget').style.display = 'none';
+  }
+}
+
+function renderScanWarnings(warnings) {
+  const el = document.getElementById('scan-warnings');
+  if (!warnings.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  el.innerHTML = `<div class="warning-banner">
+    <div class="warning-banner-title">Some sources had errors</div>
+    ${warnings.map(w => `<div class="warning-item">${esc(w)}</div>`).join('')}
+  </div>`;
+}
+
+async function refreshScoreButton() {
+  try {
+    const est = await api('/api/score/estimate');
+    const btn = document.getElementById('btn-score');
+    const hint = document.getElementById('score-hint');
+    if (est.new_jobs > 0) {
+      btn.disabled = false;
+      btn.textContent = `Score ${est.new_jobs} new job${est.new_jobs === 1 ? '' : 's'}`;
+      hint.textContent = `· estimated cost ${fmtCost(est.estimated_cost_usd)}`;
+    } else {
+      btn.disabled = true;
+      btn.textContent = 'Score new jobs';
+      hint.textContent = '· no new jobs to score';
+    }
+  } catch {
+    // non-critical
+  }
+}
+
+document.getElementById('btn-scan').addEventListener('click', async () => {
+  const ok = await showModal({
+    title: 'Scan for new jobs',
+    body: 'This will fetch fresh postings from all configured sources (Greenhouse, Lever, Ashby, Gmail alerts) and store any that pass your profile filters. No Claude API calls — no cost.',
+    confirmLabel: 'Scan now',
+  });
+  if (!ok) return;
+  showLoading('Scanning job boards...');
+  try {
+    const result = await api('/api/scan', { method: 'POST' });
+    hideLoading();
+    const now = fmtTime(new Date().toISOString());
+    document.getElementById('last-scan-hint').textContent = `· last scanned ${now}`;
+    toast(`Scan complete: ${result.stored} new matches stored (${result.fetched} total fetched)`);
+    renderScanWarnings(result.warnings || []);
+    loadPipeline();
+  } catch (e) {
+    hideLoading();
+    toast(`Scan failed: ${e.message}`, { error: true, duration: 5000 });
+  }
+});
+
+document.getElementById('btn-score').addEventListener('click', async () => {
+  const est = await api('/api/score/estimate');
+  if (est.new_jobs === 0) return;
+  const ok = await showModal({
+    title: `Score ${est.new_jobs} new job${est.new_jobs === 1 ? '' : 's'}`,
+    body: 'Claude will evaluate each job against your profile and assign a fit score. Jobs above 70 will be marked for review; the rest will be marked scored with their real score and rationale.',
+    cost: fmtCost(est.estimated_cost_usd),
+    costNote: 'Approximate. Actual cost may vary slightly based on description length.',
+    confirmLabel: 'Score jobs',
+  });
+  if (!ok) return;
+  try {
+    const result = await api('/api/score', { method: 'POST' });
+    if (!result.started) {
+      toast('No new jobs to score.');
+      return;
+    }
+    startScoringProgress(result.total);
+  } catch (e) {
+    toast(`Scoring failed: ${e.message}`, { error: true, duration: 5000 });
+  }
+});
+
+let _scorePollTimer = null;
+
+function startScoringProgress(total) {
+  const btn = document.getElementById('btn-score');
+  const hint = document.getElementById('score-hint');
+  const progress = document.getElementById('score-progress');
+  const label = document.getElementById('score-progress-label');
+  const fill = document.getElementById('score-progress-fill');
+
+  btn.disabled = true;
+  btn.textContent = 'Scoring...';
+  hint.textContent = '';
+  progress.classList.add('active');
+  label.textContent = `Scoring 0 / ${total}`;
+  fill.style.width = '0%';
+
+  const stopBtn = document.getElementById('btn-stop-score');
+  stopBtn.disabled = false;
+  stopBtn.textContent = 'Stop';
+  stopBtn.onclick = async () => {
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Stopping...';
+    try { await api('/api/score/stop', { method: 'POST' }); } catch {}
+  };
+
+  _scorePollTimer = setInterval(async () => {
+    try {
+      const state = await api('/api/score/progress');
+      const pct = state.total > 0 ? Math.round(state.scored / state.total * 100) : 0;
+      const suffix = state.stop_requested && state.running ? ' (stopping…)' : '';
+      label.textContent = `Scoring ${state.scored} / ${state.total}${suffix}`;
+      fill.style.width = pct + '%';
+
+      if (!state.running) {
+        clearInterval(_scorePollTimer);
+        _scorePollTimer = null;
+        progress.classList.remove('active');
+        fill.style.width = '0%';
+        const msg = state.stop_requested
+          ? `Stopped after ${state.scored} jobs. Already-scored results saved.`
+          : `Scoring complete: ${state.scored} jobs processed.`;
+        toast(msg);
+        loadPipeline();
+      }
+    } catch {
+      // transient poll failure — keep trying
+    }
+  }, 800);
+}
+
+function renderBudgetWidget(data) {
+  const m = data.current_month;
+  const widget = document.getElementById('budget-widget');
+  if (!m) { widget.style.display = 'none'; return; }
+  widget.style.display = '';
+
+  const monthLabel = new Date(m.month + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  document.getElementById('budget-month').textContent = monthLabel;
+
+  const pct = Math.min(m.pct_used, 100);
+  const bar = document.getElementById('budget-bar');
+  bar.style.width = pct + '%';
+  bar.className = 'budget-bar-fill' + (pct >= 90 ? ' danger' : pct >= 70 ? ' warn' : '');
+
+  document.getElementById('budget-spent').textContent =
+    `$${m.cost_usd.toFixed(4)} spent of $${m.budget_usd.toFixed(2)} budget (${m.pct_used}%)`;
+  document.getElementById('budget-remaining').textContent =
+    `$${m.remaining_usd.toFixed(4)} remaining`;
+
+  const fmtTok = n => n >= 1_000_000 ? (n / 1_000_000).toFixed(2) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n);
+  document.getElementById('budget-tokens').textContent =
+    `This month: ${fmtTok(m.input_tokens)} input tokens, ${fmtTok(m.output_tokens)} output tokens`;
+}
+
+// --- jobs view ---
+let activeStatus = '';
+
+async function loadJobs(status = activeStatus) {
+  activeStatus = status;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.status === status);
+  });
+  const url = status ? `/api/jobs?status=${status}` : '/api/jobs';
+  const jobs = await api(url);
+  const el = document.getElementById('jobs-table');
+  el.innerHTML = jobsTable(jobs);
+  el.querySelectorAll('tr.clickable').forEach(tr =>
+    tr.addEventListener('click', e => {
+      if (e.target.closest('.dismiss-btn') || e.target.closest('.posting-link')) return;
+      openDetail(tr.dataset.id);
+    })
+  );
+}
+
+document.getElementById('status-filters').addEventListener('click', e => {
+  const btn = e.target.closest('.filter-btn');
+  if (btn) loadJobs(btn.dataset.status);
+});
+
+async function dismissJob(jobId, refreshFn) {
+  await api(`/api/jobs/${jobId}/status`, {
+    method: 'POST',
+    body: JSON.stringify({ status: 'dismissed' }),
+  });
+  toast('Job dismissed. Find it under the Dismissed filter to restore.');
+  refreshFn();
+}
+
+// Delegated dismiss handler for jobs table — updates row in-place so order is preserved
+document.getElementById('jobs-table').addEventListener('click', async e => {
+  const btn = e.target.closest('.dismiss-btn');
+  if (!btn) return;
+  e.stopPropagation();
+  const jobId = btn.dataset.id;
+  await api(`/api/jobs/${jobId}/status`, {
+    method: 'POST',
+    body: JSON.stringify({ status: 'dismissed' }),
+  });
+  // Mutate the row rather than reloading so position is preserved
+  const row = btn.closest('tr');
+  const badgeCell = row.querySelector('td:nth-child(6)');
+  if (badgeCell) badgeCell.innerHTML = badge('dismissed');
+  btn.style.visibility = 'hidden';
+  toast('Dismissed. Find it under the Dismissed filter to restore.');
+});
+
+// Delegated dismiss handler for pipeline recent jobs
+document.getElementById('recent-jobs').addEventListener('click', e => {
+  const btn = e.target.closest('.dismiss-btn');
+  if (!btn) return;
+  e.stopPropagation();
+  dismissJob(btn.dataset.id, loadPipeline);
+});
+
+// --- job detail ---
+let _currentJobId = null;
+let _previousScrollY = 0;
+
+async function openDetail(jobId) {
+  previousView = currentView;
+  _previousScrollY = window.scrollY;
+  _currentJobId = jobId;
+  const job = await api(`/api/jobs/${jobId}`);
+  document.getElementById('detail-content').innerHTML = renderDetail(job);
+  showView('detail');
+  window.scrollTo(0, 0);
+  setupDetailHandlers(job);
+}
+
+async function reloadDetail() {
+  if (!_currentJobId) return;
+  const job = await api(`/api/jobs/${_currentJobId}`);
+  document.getElementById('detail-content').innerHTML = renderDetail(job);
+  setupDetailHandlers(job);
+}
+
+document.getElementById('detail-back').addEventListener('click', () => {
+  showView(previousView, { reload: false });
+  window.scrollTo(0, _previousScrollY);
+});
+
+function renderDetail(job) {
+  const scoreBlock = job.fit_rationale ? `
+    <div class="score-block">
+      ${job.fit_score > 0
+        ? `<div class="score-num ${job.fit_score >= 75 ? 'hi' : job.fit_score >= 50 ? 'mid' : 'lo'} score">${job.fit_score} / 100</div>`
+        : `<div class="score-num lo score">Below threshold</div>`}
+      <div class="score-rationale">${esc(job.fit_rationale || '')}</div>
+    </div>` : '';
+
+  // Action bar: show context-appropriate next action
+  let actionBar = '';
+  const hasDraft = job.resume_draft || job.cover_letter_draft;
+  const hasPrep = !!job.prep_brief;
+
+  if (job.status === 'new') {
+    actionBar = `
+    <div class="action-bar">
+      <span class="action-bar-label">This job hasn't been scored yet. Dismiss it to skip Claude scoring and save on cost.</span>
+      <button class="btn-danger" id="btn-dismiss-detail">Dismiss</button>
+    </div>`;
+  } else if (job.status === 'dismissed') {
+    actionBar = `
+    <div class="action-bar">
+      <span class="action-bar-label">This job was dismissed.</span>
+      <button class="btn" id="btn-restore-detail">Restore to queue</button>
+    </div>`;
+  } else if (job.status === 'scored' && !hasDraft) {
+    actionBar = `
+    <div class="action-bar">
+      <span class="action-bar-label">This job is scored and ready. Generate a tailored resume and cover letter to proceed.</span>
+      <button class="btn-danger" id="btn-dismiss-detail">Dismiss</button>
+      <button class="btn" id="btn-generate-draft">Generate draft · ${estCost('draft')}</button>
+    </div>`;
+  } else if (job.status === 'interviewing' && !hasPrep) {
+    actionBar = `
+    <div class="action-bar">
+      <span class="action-bar-label">You have an interview. Generate a prep brief with likely questions and company research.</span>
+      <button class="btn" id="btn-generate-prep">Generate prep brief · ${estCost('prep')}</button>
+    </div>`;
+  } else if (job.status === 'drafted') {
+    actionBar = `
+    <div class="action-bar">
+      <span class="action-bar-label">Review the draft below. Once you've submitted your application, update the status to <strong>submitted</strong>.</span>
+    </div>`;
+  } else if (job.status === 'submitted') {
+    actionBar = `
+    <div class="action-bar">
+      <span class="action-bar-label">Application submitted. When you hear back about an interview, update the status to <strong>interviewing</strong>.</span>
+    </div>`;
+  }
+
+  return `
+    <div class="detail-header">
+      <div class="detail-header-left">
+        <h2>${esc(job.title || '—')}</h2>
+        <div class="detail-meta">
+          ${esc(job.company || '—')} &nbsp;·&nbsp; ${esc(job.location || '—')}
+          &nbsp;·&nbsp; ${sourceTag(job.source)}
+          ${job.url ? `&nbsp;·&nbsp; <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ''}
+        </div>
+        ${badge(job.status)}
+      </div>
+      <div>
+        <select class="status-select" id="status-select">
+          ${STATUS_ORDER.map(s => `<option value="${s}" ${s === job.status ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    ${scoreBlock}
+    ${actionBar}
+
+    <div class="detail-grid">
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">Job Description</span></div>
+        <div class="panel-body">
+          <div class="prose">${esc(job.description || 'No description available.')}</div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:20px;">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Tailored Resume</span>
+            <div style="display:flex;align-items:center;">
+              <span class="save-indicator" id="resume-saved">Saved</span>
+              ${hasDraft ? `<button class="btn" id="save-resume">Save</button>` : ''}
+            </div>
+          </div>
+          <div class="panel-body">
+            ${job.resume_draft
+              ? `<textarea class="draft-edit" id="resume-draft">${esc(job.resume_draft)}</textarea>`
+              : `<div class="empty">No resume draft yet.</div>`}
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Cover Letter</span>
+            <div style="display:flex;align-items:center;">
+              <span class="save-indicator" id="cl-saved">Saved</span>
+              ${hasDraft ? `<button class="btn" id="save-cl">Save</button>` : ''}
+            </div>
+          </div>
+          <div class="panel-body">
+            ${job.cover_letter_draft
+              ? `<textarea class="draft-edit" id="cl-draft">${esc(job.cover_letter_draft)}</textarea>`
+              : `<div class="empty">No cover letter draft yet.</div>`}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${job.prep_brief ? `
+    <div class="panel" style="margin-top:20px;">
+      <div class="panel-header"><span class="panel-title">Interview Prep Brief</span></div>
+      <div class="panel-body"><div class="prose">${esc(job.prep_brief)}</div></div>
+    </div>` : ''}`;
+}
+
+function setupDetailHandlers(job) {
+  // status change
+  const sel = document.getElementById('status-select');
+  if (sel) {
+    sel.addEventListener('change', async () => {
+      await api(`/api/jobs/${job.id}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status: sel.value }),
+      });
+      toast(`Status updated to ${sel.value}`);
+      // Reload detail to show/hide appropriate action bar
+      reloadDetail();
+    });
+  }
+
+  // dismiss from detail view
+  const dismissDetailBtn = document.getElementById('btn-dismiss-detail');
+  if (dismissDetailBtn) {
+    dismissDetailBtn.addEventListener('click', async () => {
+      await api(`/api/jobs/${job.id}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status: 'dismissed' }),
+      });
+      toast('Dismissed.');
+      showView('jobs');
+    });
+  }
+
+  // restore dismissed job to new
+  const restoreDetailBtn = document.getElementById('btn-restore-detail');
+  if (restoreDetailBtn) {
+    restoreDetailBtn.addEventListener('click', async () => {
+      await api(`/api/jobs/${job.id}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status: 'new' }),
+      });
+      toast('Restored to queue.');
+      await reloadDetail();
+    });
+  }
+
+  // generate draft
+  const draftBtn = document.getElementById('btn-generate-draft');
+  if (draftBtn) {
+    draftBtn.addEventListener('click', async () => {
+      const ok = await showModal({
+        title: `Generate draft for ${job.company || 'this job'}`,
+        body: `Claude will rewrite your resume bullets and summary for "${job.title}" at ${job.company || 'this company'}, then draft a tailored cover letter. You can edit the output before submitting.`,
+        cost: estCost('draft'),
+        costNote: 'Approximate. Actual cost logged in Activity after completion.',
+        confirmLabel: 'Generate draft',
+      });
+      if (!ok) return;
+      showLoading('Generating tailored resume and cover letter...');
+      try {
+        await api(`/api/jobs/${job.id}/generate-draft`, { method: 'POST' });
+        hideLoading();
+        toast('Draft generated. Review and edit below before submitting.');
+        reloadDetail();
+      } catch (e) {
+        hideLoading();
+        toast(`Draft generation failed: ${e.message}`, { error: true, duration: 5000 });
+      }
+    });
+  }
+
+  // generate prep brief
+  const prepBtn = document.getElementById('btn-generate-prep');
+  if (prepBtn) {
+    prepBtn.addEventListener('click', async () => {
+      const ok = await showModal({
+        title: `Generate interview prep for ${job.company || 'this job'}`,
+        body: `Claude will research ${job.company || 'the company'} and generate likely interview questions, talking points, and preparation notes for "${job.title}".`,
+        cost: estCost('prep'),
+        costNote: 'Approximate. Actual cost logged in Activity after completion.',
+        confirmLabel: 'Generate prep brief',
+      });
+      if (!ok) return;
+      showLoading('Generating interview prep brief...');
+      try {
+        await api(`/api/jobs/${job.id}/generate-prep`, { method: 'POST' });
+        hideLoading();
+        toast('Prep brief ready.');
+        reloadDetail();
+      } catch (e) {
+        hideLoading();
+        toast(`Prep generation failed: ${e.message}`, { error: true, duration: 5000 });
+      }
+    });
+  }
+
+  // save resume draft
+  const saveResume = document.getElementById('save-resume');
+  if (saveResume) {
+    saveResume.addEventListener('click', async () => {
+      const text = document.getElementById('resume-draft').value;
+      await api(`/api/jobs/${job.id}/draft`, {
+        method: 'POST',
+        body: JSON.stringify({ resume_draft: text }),
+      });
+      const ind = document.getElementById('resume-saved');
+      ind.style.display = 'inline';
+      setTimeout(() => ind.style.display = 'none', 2000);
+    });
+  }
+
+  // save cover letter draft
+  const saveCl = document.getElementById('save-cl');
+  if (saveCl) {
+    saveCl.addEventListener('click', async () => {
+      const text = document.getElementById('cl-draft').value;
+      await api(`/api/jobs/${job.id}/draft`, {
+        method: 'POST',
+        body: JSON.stringify({ cover_letter_draft: text }),
+      });
+      const ind = document.getElementById('cl-saved');
+      ind.style.display = 'inline';
+      setTimeout(() => ind.style.display = 'none', 2000);
+    });
+  }
+}
+
+// --- activity view ---
+async function loadActivity() {
+  const items = await api('/api/activity?limit=200');
+  const el = document.getElementById('activity-list');
+  if (!items.length) { el.innerHTML = '<div class="empty">No activity yet.</div>'; return; }
+
+  el.innerHTML = '<div class="activity-list">' + items.map(item => {
+    const label = activityLabel(item);
+    const tokens = tokenLine(item);
+    return `<div class="activity-item">
+      <div class="activity-dot dot-${item.event_type}"></div>
+      <div class="activity-body">
+        <div>${label}</div>
+        ${tokens}
+        <div class="activity-time">${fmtTime(item.created_at)}</div>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function tokenLine(item) {
+  const d = item.detail || {};
+  if (!d.input_tokens && !d.output_tokens) return '';
+  const fmtTok = n => n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n || 0);
+  const cost = tokenCost(d.model || 'claude-sonnet-4-6', d.input_tokens || 0, d.output_tokens || 0);
+  return `<div class="activity-tokens">${fmtTok(d.input_tokens)} in · ${fmtTok(d.output_tokens)} out · ${fmtCost(cost)}</div>`;
+}
+
+function activityLabel(item) {
+  const d = item.detail || {};
+  switch (item.event_type) {
+    case 'status_change':
+      return `<strong>${esc(item.job_id)}</strong> moved from <em>${esc(d.from || '?')}</em> to <strong>${esc(d.to || '?')}</strong>`;
+    case 'draft_generated': {
+      const fields = (d.edited_fields || []).join(', ');
+      const src = d.source === 'manual_edit' ? 'edited manually' : 'generated';
+      return `<strong>${esc(item.job_id)}</strong> draft ${src}${fields ? ': ' + esc(fields) : ''}`;
+    }
+    case 'scan_run':
+      return `Scan complete: <strong>${d.stored || d.count || 0}</strong> matches stored (${d.fetched || d.count || 0} fetched)`;
+    case 'score_run':
+      return `Scored <strong>${d.total_postings || 0}</strong> postings: <strong>${d.above_threshold || 0}</strong> above threshold (${d.threshold || 70})`;
+    case 'prep_generated':
+      return `Interview prep generated for <strong>${esc(item.job_id)}</strong>`;
+    default:
+      return esc(item.event_type);
+  }
+}
+
+// --- init ---
+showView('pipeline');
+</script>
+</body>
+</html>

@@ -10,6 +10,7 @@ from agents.scorer import (
     passes_hard_filters,
     _fmt_profile,
     _extract_json,
+    _is_director_plus,
     score_posting,
     score_all,
 )
@@ -80,6 +81,31 @@ def test_excludes_company_case_insensitive():
 
 def test_non_excluded_company_passes():
     assert passes_hard_filters({**POSTING, "company": "AcmeCorp"}, PROFILE) is True
+
+
+# ---------------------------------------------------------------------------
+# passes_hard_filters — exclude_title_keywords
+# ---------------------------------------------------------------------------
+
+def test_exclude_title_keyword_blocks_matching_title():
+    profile = {**PROFILE, "exclude_title_keywords": ["account director"]}
+    assert passes_hard_filters({**POSTING, "title": "Account Director"}, profile) is False
+
+def test_exclude_title_keyword_case_insensitive():
+    profile = {**PROFILE, "exclude_title_keywords": ["account manager"]}
+    assert passes_hard_filters({**POSTING, "title": "ACCOUNT MANAGER, Enterprise"}, profile) is False
+
+def test_exclude_title_keyword_substring_match():
+    profile = {**PROFILE, "exclude_title_keywords": ["account director"]}
+    assert passes_hard_filters({**POSTING, "title": "Senior Account Director, EMEA"}, profile) is False
+
+def test_exclude_title_keyword_does_not_block_non_matching():
+    profile = {**PROFILE, "exclude_title_keywords": ["account director", "account manager"]}
+    assert passes_hard_filters({**POSTING, "title": "VP Engineering"}, profile) is True
+
+def test_exclude_title_keyword_empty_list_passes_all():
+    profile = {**PROFILE, "exclude_title_keywords": []}
+    assert passes_hard_filters(POSTING, profile) is True
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +424,71 @@ def test_score_posting_retries_on_empty_response():
 
 
 # ---------------------------------------------------------------------------
+# _is_director_plus — title-level seniority detection
+# ---------------------------------------------------------------------------
+
+def test_is_director_plus_vp():
+    assert _is_director_plus("VP Engineering") is True
+
+def test_is_director_plus_director():
+    assert _is_director_plus("Director of Engineering") is True
+
+def test_is_director_plus_head_of():
+    assert _is_director_plus("Head of Engineering") is True
+
+def test_is_director_plus_cto():
+    assert _is_director_plus("CTO") is True
+
+def test_is_director_plus_chief():
+    assert _is_director_plus("Chief Technology Officer") is True
+
+def test_is_director_plus_engineering_manager():
+    assert _is_director_plus("Engineering Manager") is False
+
+def test_is_director_plus_senior_engineering_manager():
+    assert _is_director_plus("Senior Engineering Manager") is False
+
+def test_is_director_plus_case_insensitive():
+    assert _is_director_plus("vp of engineering") is True
+    assert _is_director_plus("engineering manager") is False
+
+
+# ---------------------------------------------------------------------------
+# score_posting — non-Bay-Area manager-level penalty
+# ---------------------------------------------------------------------------
+
+def test_score_posting_applies_non_bay_area_manager_penalty():
+    manager_posting = {**POSTING, "title": "Engineering Manager"}
+    with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
+        result = score_posting(manager_posting, PROFILE)
+    assert result["fit_score"] == 75  # 85 - 10 penalty
+    assert "Non-Bay-Area manager-level penalty" in result["fit_rationale"]
+
+
+def test_score_posting_no_penalty_for_director_outside_bay_area():
+    with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
+        result = score_posting(POSTING, PROFILE)  # VP Engineering in New York — director+, no adjustment
+    assert result["fit_score"] == 85
+
+
+def test_score_posting_no_penalty_when_bay_area_manager():
+    manager_sf = {**POSTING, "title": "Engineering Manager", "location": "San Francisco, CA"}
+    with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
+        result = score_posting(manager_sf, PROFILE)
+    assert result["fit_score"] == 93  # 85 + 8 Bay Area boost, no penalty
+    assert "Bay Area location boost" in result["fit_rationale"]
+    assert "penalty" not in result["fit_rationale"]
+
+
+def test_score_posting_non_bay_area_manager_penalty_floors_at_zero():
+    very_low = {**CLAUDE_RESPONSE, "text": '{"score": 5, "rationale": "Very poor fit"}'}
+    manager_posting = {**POSTING, "title": "Engineering Manager"}
+    with patch("agents.scorer.complete", return_value=very_low):
+        result = score_posting(manager_posting, PROFILE)
+    assert result["fit_score"] == 0  # floor at 0, not negative
+
+
+# ---------------------------------------------------------------------------
 # score_all — tuple return, threshold, hard filter, sort, callbacks
 # ---------------------------------------------------------------------------
 
@@ -458,8 +549,8 @@ def test_score_all_skips_hard_filter_failures():
 
 def test_score_all_sorts_by_score_descending():
     postings = [
-        {**POSTING, "id": "a", "title": "Role A"},
-        {**POSTING, "id": "b", "title": "Role B"},
+        {**POSTING, "id": "a", "title": "VP Engineering"},
+        {**POSTING, "id": "b", "title": "VP Engineering"},
     ]
     responses = [
         {**CLAUDE_RESPONSE, "text": '{"score": 75, "rationale": "OK"}'},

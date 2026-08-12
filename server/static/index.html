@@ -159,6 +159,39 @@
     outline: none; min-height: 400px;
   }
 
+  .diff-view {
+    font-family: inherit; font-size: 13px; line-height: 1.7;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .diff-added   { background: rgba(62, 207, 142, 0.12); color: var(--green); display: block; }
+  .diff-removed { background: rgba(245, 96, 96, 0.10); color: var(--muted); text-decoration: line-through; display: block; }
+  .diff-unchanged { color: var(--muted); display: block; }
+
+  /* Chat panel (iterate on drafts) */
+  .chat-panel {
+    margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .chat-messages {
+    display: flex; flex-direction: column; gap: 10px;
+    max-height: 320px; overflow-y: auto;
+  }
+  .chat-msg {
+    padding: 8px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5;
+    max-width: 90%; white-space: pre-wrap; word-break: break-word;
+  }
+  .chat-msg-user { align-self: flex-end; background: var(--accent-dim); color: var(--text); }
+  .chat-msg-assistant { align-self: flex-start; background: var(--surface2); color: var(--text); }
+  .chat-msg-pending { color: var(--muted); font-style: italic; }
+  .chat-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 8px; }
+  .chat-input-row { display: flex; gap: 8px; align-items: flex-end; }
+  .chat-input {
+    flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 8px 10px; font-family: inherit; font-size: 13px;
+    resize: none; outline: none;
+  }
+  .chat-input:focus { border-color: var(--accent); }
+
   .btn {
     background: var(--accent); color: #fff; border: none; border-radius: 6px;
     padding: 6px 14px; cursor: pointer; font-size: 12px; font-weight: 600;
@@ -167,11 +200,11 @@
   .btn:hover:not(:disabled) { opacity: .85; }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
   .btn-ghost {
-    background: none; border: 1px solid var(--border); color: var(--muted);
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
     border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 12px;
     transition: all .15s;
   }
-  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-dim); }
   .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
   .btn-danger {
     background: var(--red); color: #fff; border: none; border-radius: 6px;
@@ -226,6 +259,7 @@
   }
   .dot-status_change { background: var(--accent); }
   .dot-draft_generated { background: var(--green); }
+  .dot-draft_revised { background: var(--blue); }
   .dot-scan_run { background: var(--yellow); }
   .dot-score_run { background: var(--blue); }
   .dot-prep_generated { background: #c084fc; }
@@ -390,6 +424,7 @@
         <button class="filter-btn" data-status="rejected">Rejected</button>
         <button class="filter-btn" data-status="offer">Offer</button>
       </div>
+      <div id="jobs-count" style="font-size:13px;color:var(--muted);margin-bottom:10px;min-height:18px;"></div>
       <div id="jobs-table"></div>
     </div>
 
@@ -535,7 +570,7 @@ function tokenCost(model, inputTok, outputTok) {
 }
 
 function fmtCost(usd) {
-  return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 function estCost(key) {
@@ -585,13 +620,15 @@ function sourceTag(source) {
   return `<span class="source-tag">${esc(label)}</span>`;
 }
 
+const DISMISSIBLE_STATUSES = ['new', 'scored'];
+
 function jobsTable(jobs, clickable = true) {
   if (!jobs.length) return '<div class="empty">No jobs found.</div>';
-  const hasNew = jobs.some(j => j.status === 'new');
+  const hasDismissible = jobs.some(j => DISMISSIBLE_STATUSES.includes(j.status));
   return `<table>
     <thead><tr>
       <th>Company</th><th>Title</th><th>Location</th><th>Source</th><th>Score</th><th>Status</th><th>Updated</th><th></th>
-      ${hasNew ? '<th></th>' : ''}
+      ${hasDismissible ? '<th></th>' : ''}
     </tr></thead>
     <tbody>
       ${jobs.map(j => `
@@ -604,7 +641,7 @@ function jobsTable(jobs, clickable = true) {
           <td>${badge(j.status)}</td>
           <td>${fmtDate(j.last_updated)}</td>
           <td>${j.url ? `<a class="posting-link" href="${esc(j.url)}" target="_blank" rel="noopener" title="View posting">↗</a>` : ''}</td>
-          ${hasNew ? `<td><button class="btn-dismiss${j.status === 'new' ? ' dismiss-btn' : ''}" data-id="${j.id}" ${j.status !== 'new' ? 'style="visibility:hidden"' : ''}>Dismiss</button></td>` : ''}
+          ${hasDismissible ? `<td><button class="btn-dismiss${DISMISSIBLE_STATUSES.includes(j.status) ? ' dismiss-btn' : ''}" data-id="${j.id}" ${!DISMISSIBLE_STATUSES.includes(j.status) ? 'style="visibility:hidden"' : ''}>Dismiss</button></td>` : ''}
         </tr>`).join('')}
     </tbody>
   </table>`;
@@ -702,7 +739,7 @@ document.getElementById('btn-score').addEventListener('click', async () => {
   if (est.new_jobs === 0) return;
   const ok = await showModal({
     title: `Score ${est.new_jobs} new job${est.new_jobs === 1 ? '' : 's'}`,
-    body: 'Claude will evaluate each job against your profile and assign a fit score. Jobs above 70 will be marked for review; the rest will be marked scored with their real score and rationale.',
+    body: 'Claude will evaluate each new job against your profile and assign a fit score (0–100) with a rationale. All scored jobs appear in the Scored filter, sorted by score. From there you can generate a draft or dismiss.',
     cost: fmtCost(est.estimated_cost_usd),
     costNote: 'Approximate. Actual cost may vary slightly based on description length.',
     confirmLabel: 'Score jobs',
@@ -785,9 +822,9 @@ function renderBudgetWidget(data) {
   bar.className = 'budget-bar-fill' + (pct >= 90 ? ' danger' : pct >= 70 ? ' warn' : '');
 
   document.getElementById('budget-spent').textContent =
-    `$${m.cost_usd.toFixed(4)} spent of $${m.budget_usd.toFixed(2)} budget (${m.pct_used}%)`;
+    `$${m.cost_usd.toFixed(2)} spent of $${m.budget_usd.toFixed(2)} budget (${m.pct_used}%)`;
   document.getElementById('budget-remaining').textContent =
-    `$${m.remaining_usd.toFixed(4)} remaining`;
+    `$${m.remaining_usd.toFixed(2)} remaining`;
 
   const fmtTok = n => n >= 1_000_000 ? (n / 1_000_000).toFixed(2) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n);
   document.getElementById('budget-tokens').textContent =
@@ -804,6 +841,9 @@ async function loadJobs(status = activeStatus) {
   });
   const url = status ? `/api/jobs?status=${status}` : '/api/jobs';
   const jobs = await api(url);
+  const countEl = document.getElementById('jobs-count');
+  const label = status ? `with status "${status}"` : 'total';
+  countEl.textContent = `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'} ${label}`;
   const el = document.getElementById('jobs-table');
   el.innerHTML = jobsTable(jobs);
   el.querySelectorAll('tr.clickable').forEach(tr =>
@@ -854,6 +894,94 @@ document.getElementById('recent-jobs').addEventListener('click', e => {
   dismissJob(btn.dataset.id, loadPipeline);
 });
 
+// --- draft chat (iterate on resume / cover letter with feedback) ---
+const CHAT_CONFIG = {
+  resume:        { prefix: 'resume', draftTextareaId: 'resume-draft' },
+  cover_letter:  { prefix: 'cl',     draftTextareaId: 'cl-draft' },
+};
+let _chatOpen = { resume: false, cover_letter: false };
+let _chatLoaded = { resume: false, cover_letter: false };
+
+function renderChatMessage(role, content) {
+  const cls = role === 'user' ? 'chat-msg-user' : 'chat-msg-assistant';
+  return `<div class="chat-msg ${cls}">${esc(content)}</div>`;
+}
+
+async function loadChatMessages(jobId, section) {
+  const cfg = CHAT_CONFIG[section];
+  const data = await api(`/api/jobs/${jobId}/chat/${section}`);
+  const list = document.getElementById(`${cfg.prefix}-chat-messages`);
+  if (!list) return;
+  list.innerHTML = data.messages.length
+    ? data.messages.map(m => renderChatMessage(m.role, m.content)).join('')
+    : '<div class="chat-empty">Give feedback below to start iterating on this draft.</div>';
+  list.scrollTop = list.scrollHeight;
+  _chatLoaded[section] = true;
+}
+
+function setupChatPanel(job, section) {
+  const cfg = CHAT_CONFIG[section];
+  const toggleBtn = document.getElementById(`btn-${cfg.prefix}-chat`);
+  const panel = document.getElementById(`${cfg.prefix}-chat-panel`);
+  if (!toggleBtn || !panel) return;
+
+  panel.style.display = _chatOpen[section] ? '' : 'none';
+  toggleBtn.textContent = _chatOpen[section] ? 'Hide chat' : 'Iterate';
+  if (_chatOpen[section] && !_chatLoaded[section]) loadChatMessages(job.id, section);
+
+  toggleBtn.addEventListener('click', async () => {
+    _chatOpen[section] = !_chatOpen[section];
+    panel.style.display = _chatOpen[section] ? '' : 'none';
+    toggleBtn.textContent = _chatOpen[section] ? 'Hide chat' : 'Iterate';
+    if (_chatOpen[section] && !_chatLoaded[section]) await loadChatMessages(job.id, section);
+  });
+
+  const input = document.getElementById(`${cfg.prefix}-chat-input`);
+  const sendBtn = document.getElementById(`${cfg.prefix}-chat-send`);
+
+  const send = async () => {
+    const message = input.value.trim();
+    if (!message) return;
+    input.value = '';
+    input.disabled = true;
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending...';
+
+    const list = document.getElementById(`${cfg.prefix}-chat-messages`);
+    const emptyEl = list.querySelector('.chat-empty');
+    if (emptyEl) emptyEl.remove();
+    list.insertAdjacentHTML('beforeend', renderChatMessage('user', message));
+    list.insertAdjacentHTML('beforeend', `<div class="chat-msg chat-msg-assistant chat-msg-pending" id="${cfg.prefix}-chat-pending">Thinking...</div>`);
+    list.scrollTop = list.scrollHeight;
+
+    try {
+      await api(`/api/jobs/${job.id}/chat/${section}`, {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+      });
+      _chatLoaded[section] = false;
+      await reloadDetail();
+      toast('Draft updated from feedback.');
+    } catch (e) {
+      const pending = document.getElementById(`${cfg.prefix}-chat-pending`);
+      if (pending) pending.remove();
+      list.insertAdjacentHTML('beforeend', `<div class="chat-msg chat-msg-assistant" style="color:var(--red)">Failed to revise: ${esc(e.message)}</div>`);
+      toast('Failed to revise draft.', { error: true, duration: 5000 });
+      input.disabled = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+    }
+  };
+
+  sendBtn.addEventListener('click', send);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+}
+
 // --- job detail ---
 let _currentJobId = null;
 let _previousScrollY = 0;
@@ -862,6 +990,8 @@ async function openDetail(jobId) {
   previousView = currentView;
   _previousScrollY = window.scrollY;
   _currentJobId = jobId;
+  _chatOpen = { resume: false, cover_letter: false };
+  _chatLoaded = { resume: false, cover_letter: false };
   const job = await api(`/api/jobs/${jobId}`);
   document.getElementById('detail-content').innerHTML = renderDetail(job);
   showView('detail');
@@ -965,14 +1095,24 @@ function renderDetail(job) {
         <div class="panel">
           <div class="panel-header">
             <span class="panel-title">Tailored Resume</span>
-            <div style="display:flex;align-items:center;">
+            <div style="display:flex;align-items:center;gap:8px;">
               <span class="save-indicator" id="resume-saved">Saved</span>
+              ${job.resume_draft ? `<button class="btn-ghost" id="btn-resume-chat">Iterate</button>` : ''}
+              ${job.resume_draft ? `<button class="btn-ghost" id="btn-resume-diff">Show diff</button>` : ''}
               ${hasDraft ? `<button class="btn" id="save-resume">Save</button>` : ''}
             </div>
           </div>
           <div class="panel-body">
             ${job.resume_draft
-              ? `<textarea class="draft-edit" id="resume-draft">${esc(job.resume_draft)}</textarea>`
+              ? `<textarea class="draft-edit" id="resume-draft">${esc(job.resume_draft)}</textarea>
+                 <div class="diff-view" id="resume-diff-view" style="display:none;"></div>
+                 <div class="chat-panel" id="resume-chat-panel" style="display:none;">
+                   <div class="chat-messages" id="resume-chat-messages"></div>
+                   <div class="chat-input-row">
+                     <textarea class="chat-input" id="resume-chat-input" rows="2" placeholder="e.g. Lead with the platform migration bullet instead"></textarea>
+                     <button class="btn" id="resume-chat-send">Send</button>
+                   </div>
+                 </div>`
               : `<div class="empty">No resume draft yet.</div>`}
           </div>
         </div>
@@ -980,14 +1120,22 @@ function renderDetail(job) {
         <div class="panel">
           <div class="panel-header">
             <span class="panel-title">Cover Letter</span>
-            <div style="display:flex;align-items:center;">
+            <div style="display:flex;align-items:center;gap:8px;">
               <span class="save-indicator" id="cl-saved">Saved</span>
+              ${job.cover_letter_draft ? `<button class="btn-ghost" id="btn-cl-chat">Iterate</button>` : ''}
               ${hasDraft ? `<button class="btn" id="save-cl">Save</button>` : ''}
             </div>
           </div>
           <div class="panel-body">
             ${job.cover_letter_draft
-              ? `<textarea class="draft-edit" id="cl-draft">${esc(job.cover_letter_draft)}</textarea>`
+              ? `<textarea class="draft-edit" id="cl-draft">${esc(job.cover_letter_draft)}</textarea>
+                 <div class="chat-panel" id="cl-chat-panel" style="display:none;">
+                   <div class="chat-messages" id="cl-chat-messages"></div>
+                   <div class="chat-input-row">
+                     <textarea class="chat-input" id="cl-chat-input" rows="2" placeholder="e.g. Make the second paragraph shorter"></textarea>
+                     <button class="btn" id="cl-chat-send">Send</button>
+                   </div>
+                 </div>`
               : `<div class="empty">No cover letter draft yet.</div>`}
           </div>
         </div>
@@ -1092,6 +1240,46 @@ function setupDetailHandlers(job) {
     });
   }
 
+  // resume diff toggle
+  const diffBtn = document.getElementById('btn-resume-diff');
+  if (diffBtn) {
+    let diffLoaded = false;
+    let diffMode = false;
+    diffBtn.addEventListener('click', async () => {
+      const textarea = document.getElementById('resume-draft');
+      const diffView = document.getElementById('resume-diff-view');
+      const saveBtn = document.getElementById('save-resume');
+      diffMode = !diffMode;
+      if (diffMode) {
+        if (!diffLoaded) {
+          diffBtn.textContent = 'Loading...';
+          try {
+            const data = await api(`/api/jobs/${job.id}/resume-diff`);
+            diffView.innerHTML = data.lines.map(l => {
+              const cls = l.type === 'added' ? 'diff-added' : l.type === 'removed' ? 'diff-removed' : 'diff-unchanged';
+              return `<span class="${cls}">${esc(l.text) || '​'}</span>`;
+            }).join('');
+            diffLoaded = true;
+          } catch (e) {
+            diffBtn.textContent = 'Show diff';
+            diffMode = false;
+            toast('Could not load diff.', { error: true });
+            return;
+          }
+        }
+        textarea.style.display = 'none';
+        diffView.style.display = '';
+        if (saveBtn) saveBtn.style.display = 'none';
+        diffBtn.textContent = 'Edit';
+      } else {
+        textarea.style.display = '';
+        diffView.style.display = 'none';
+        if (saveBtn) saveBtn.style.display = '';
+        diffBtn.textContent = 'Show diff';
+      }
+    });
+  }
+
   // save resume draft
   const saveResume = document.getElementById('save-resume');
   if (saveResume) {
@@ -1121,6 +1309,10 @@ function setupDetailHandlers(job) {
       setTimeout(() => ind.style.display = 'none', 2000);
     });
   }
+
+  // iterate on drafts via chat
+  setupChatPanel(job, 'resume');
+  setupChatPanel(job, 'cover_letter');
 }
 
 // --- activity view ---
@@ -1160,6 +1352,10 @@ function activityLabel(item) {
       const fields = (d.edited_fields || []).join(', ');
       const src = d.source === 'manual_edit' ? 'edited manually' : 'generated';
       return `<strong>${esc(item.job_id)}</strong> draft ${src}${fields ? ': ' + esc(fields) : ''}`;
+    }
+    case 'draft_revised': {
+      const section = d.section === 'cover_letter' ? 'cover letter' : 'resume';
+      return `<strong>${esc(item.job_id)}</strong> ${section} draft revised via chat`;
     }
     case 'scan_run':
       return `Scan complete: <strong>${d.stored || d.count || 0}</strong> matches stored (${d.fetched || d.count || 0} fetched)`;

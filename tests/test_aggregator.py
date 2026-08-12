@@ -361,7 +361,30 @@ def test_fetch_lever_skips_jobs_without_url():
 # fetch_ashby
 # ---------------------------------------------------------------------------
 
-def test_fetch_ashby_normalizes_posting():
+def test_fetch_ashby_normalizes_posting_v1():
+    resp = _mock_response({
+        "apiVersion": 1,
+        "jobs": [{
+            "jobUrl": "https://jobs.ashbyhq.com/ramp/abc-123",
+            "title": "Head of Engineering",
+            "location": "New York, NY",
+            "descriptionPlain": "Join our team.",
+            "publishedAt": "2026-06-01T00:00:00.000+00:00",
+            "isListed": True,
+        }],
+    })
+    with patch("agents.aggregator.requests.get", return_value=resp):
+        result = fetch_ashby("ramp")
+    assert len(result) == 1
+    assert result[0]["title"] == "Head of Engineering"
+    assert result[0]["source"] == "ashby"
+    assert result[0]["company"] == "Ramp"
+    assert result[0]["location"] == "New York, NY"
+    assert result[0]["posted_date"] == "2026-06-01"
+    assert "Join our team" in result[0]["description"]
+
+
+def test_fetch_ashby_normalizes_posting_legacy():
     resp = _mock_response({
         "organization": {"name": "Ramp"},
         "jobPostings": [{
@@ -375,22 +398,52 @@ def test_fetch_ashby_normalizes_posting():
     with patch("agents.aggregator.requests.get", return_value=resp):
         result = fetch_ashby("ramp")
     assert len(result) == 1
-    assert result[0]["title"] == "Head of Engineering"
-    assert result[0]["source"] == "ashby"
     assert result[0]["company"] == "Ramp"
     assert result[0]["posted_date"] == "2026-06-01"
     assert "Join our team" in result[0]["description"]
 
 
-def test_fetch_ashby_skips_jobs_without_url():
+def test_fetch_ashby_skips_unlisted_jobs():
     resp = _mock_response({
-        "organization": {"name": "Ramp"},
-        "jobPostings": [
-            {"jobUrl": "", "title": "No URL", "locationName": "", "descriptionHtml": "", "publishedDate": ""},
+        "apiVersion": 1,
+        "jobs": [
+            {"jobUrl": "https://jobs.ashbyhq.com/ramp/hidden", "title": "Unlisted",
+             "location": "Remote", "isListed": False, "publishedAt": "2026-06-01T00:00:00Z"},
             {"jobUrl": "https://jobs.ashbyhq.com/ramp/xyz", "title": "Good Job",
-             "locationName": "Remote", "descriptionHtml": "", "publishedDate": "2026-06-01"},
+             "location": "Remote", "isListed": True, "publishedAt": "2026-06-01T00:00:00Z"},
         ],
     })
     with patch("agents.aggregator.requests.get", return_value=resp):
         result = fetch_ashby("ramp")
     assert len(result) == 1
+    assert result[0]["title"] == "Good Job"
+
+
+def test_fetch_ashby_skips_jobs_without_url():
+    resp = _mock_response({
+        "apiVersion": 1,
+        "jobs": [
+            {"jobUrl": "", "title": "No URL", "location": "", "isListed": True, "publishedAt": ""},
+            {"jobUrl": "https://jobs.ashbyhq.com/ramp/xyz", "title": "Good Job",
+             "location": "Remote", "isListed": True, "publishedAt": "2026-06-01T00:00:00Z"},
+        ],
+    })
+    with patch("agents.aggregator.requests.get", return_value=resp):
+        result = fetch_ashby("ramp")
+    assert len(result) == 1
+
+
+def test_fetch_ashby_falls_back_to_board_name_for_company():
+    resp = _mock_response({
+        "apiVersion": 1,
+        "jobs": [{
+            "jobUrl": "https://jobs.ashbyhq.com/open-ai/abc",
+            "title": "Engineer",
+            "location": "Remote",
+            "isListed": True,
+            "publishedAt": "2026-06-01T00:00:00Z",
+        }],
+    })
+    with patch("agents.aggregator.requests.get", return_value=resp):
+        result = fetch_ashby("open-ai")
+    assert result[0]["company"] == "Open Ai"

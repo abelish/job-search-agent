@@ -5,7 +5,7 @@ it is exercised indirectly via mocked calls in test_scorer.py.
 """
 
 import pytest
-from agents.claude_client import cost_usd, DEFAULT_MODEL, PRICING
+from agents.claude_client import cost_usd, parse_reply_and_draft, DEFAULT_MODEL, PRICING
 
 
 def test_cost_usd_sonnet_one_million_each():
@@ -59,3 +59,35 @@ def test_pricing_table_has_input_and_output():
     for model, prices in PRICING.items():
         assert "input" in prices, f"{model} missing input price"
         assert "output" in prices, f"{model} missing output price"
+
+
+# ---------------------------------------------------------------------------
+# parse_reply_and_draft
+# ---------------------------------------------------------------------------
+
+def test_parse_reply_and_draft_splits_tagged_response():
+    text = "<reply>\nMade it punchier.\n</reply>\n<draft>\nThe revised text.\n</draft>"
+    reply, draft = parse_reply_and_draft(text)
+    assert reply == "Made it punchier."
+    assert draft == "The revised text."
+
+
+def test_parse_reply_and_draft_handles_multiline_draft():
+    text = "<reply>Done.</reply>\n<draft>\nLine one.\nLine two.\nLine three.\n</draft>"
+    reply, draft = parse_reply_and_draft(text)
+    assert reply == "Done."
+    assert draft == "Line one.\nLine two.\nLine three."
+
+
+def test_parse_reply_and_draft_falls_back_when_untagged():
+    text = "Just a plain response with no tags at all."
+    reply, draft = parse_reply_and_draft(text)
+    assert reply == "Updated the draft."
+    assert draft == text
+
+
+def test_parse_reply_and_draft_falls_back_when_only_one_tag_present():
+    text = "<reply>Some reply</reply>\nNo draft tag here."
+    reply, draft = parse_reply_and_draft(text)
+    assert reply == "Updated the draft."
+    assert draft == text

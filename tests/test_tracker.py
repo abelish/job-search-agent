@@ -177,6 +177,60 @@ def test_get_stats_returns_all_statuses():
 
 
 # ---------------------------------------------------------------------------
+# chat (resume / cover letter iteration)
+# ---------------------------------------------------------------------------
+
+def test_get_chat_empty_when_no_history():
+    tr.upsert_job(JOB)
+    assert tr.get_chat("test001", "resume") == []
+
+
+def test_record_chat_turn_appends_history_and_updates_draft():
+    tr.upsert_job({**JOB, "resume_draft": "Original resume."})
+    tr.record_chat_turn("test001", "resume", "Make it punchier", "Made it punchier.", "Punchier resume.")
+    history = tr.get_chat("test001", "resume")
+    assert len(history) == 2
+    assert history[0] == {"role": "user", "content": "Make it punchier", "created_at": history[0]["created_at"]}
+    assert history[1]["role"] == "assistant"
+    assert history[1]["content"] == "Made it punchier."
+    assert tr.get_job("test001")["resume_draft"] == "Punchier resume."
+
+
+def test_record_chat_turn_accumulates_across_calls():
+    tr.upsert_job({**JOB, "resume_draft": "v1"})
+    tr.record_chat_turn("test001", "resume", "feedback 1", "reply 1", "v2")
+    tr.record_chat_turn("test001", "resume", "feedback 2", "reply 2", "v3")
+    history = tr.get_chat("test001", "resume")
+    assert len(history) == 4
+    assert tr.get_job("test001")["resume_draft"] == "v3"
+
+
+def test_record_chat_turn_sections_are_independent():
+    tr.upsert_job({**JOB, "resume_draft": "resume v1", "cover_letter_draft": "cl v1"})
+    tr.record_chat_turn("test001", "resume", "fb", "reply", "resume v2")
+    assert tr.get_chat("test001", "cover_letter") == []
+    assert tr.get_job("test001")["cover_letter_draft"] == "cl v1"
+
+
+def test_clear_chat_resets_history_but_keeps_draft():
+    tr.upsert_job({**JOB, "resume_draft": "v1"})
+    tr.record_chat_turn("test001", "resume", "fb", "reply", "v2")
+    tr.clear_chat("test001", "resume")
+    assert tr.get_chat("test001", "resume") == []
+    assert tr.get_job("test001")["resume_draft"] == "v2"
+
+
+def test_chat_invalid_section_raises():
+    tr.upsert_job(JOB)
+    with pytest.raises(ValueError):
+        tr.get_chat("test001", "bogus")
+    with pytest.raises(ValueError):
+        tr.record_chat_turn("test001", "bogus", "fb", "reply", "draft")
+    with pytest.raises(ValueError):
+        tr.clear_chat("test001", "bogus")
+
+
+# ---------------------------------------------------------------------------
 # get_token_summary
 # ---------------------------------------------------------------------------
 

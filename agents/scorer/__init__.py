@@ -47,6 +47,18 @@ Score meaning:
 Location note: The candidate strongly prefers to stay local in the San Francisco Bay Area.
 Score on-site or hybrid Bay Area roles 5 to 10 points higher than equivalent roles elsewhere,
 all else being equal.
+
+Compensation note: Before concluding that compensation is unlisted, read the full job description
+carefully for any mention of salary range, base pay, total compensation, equity, OTE, or annual
+pay. Compensation figures often appear at the end of the description after the requirements
+section. If a range or figure is present anywhere in the description, cite it in your rationale
+and factor it against the candidate's stated minimum compensation.
+
+Bay Area compensation benchmarks are significantly higher than most other markets. For roles that
+are manager-level (Engineering Manager, Senior Engineering Manager) rather than director-level or
+above (Director, VP, Head of, CTO), and located outside the Bay Area, score 10 to 15 points lower
+than you otherwise would. These roles rarely offer the compensation range the candidate requires
+without a relocation premium that most companies will not provide.
 """
 
 _BAY_AREA_TERMS = {
@@ -56,6 +68,17 @@ _BAY_AREA_TERMS = {
     "menlo park", "fremont", "hayward", "pleasanton", "walnut creek",
 }
 
+# Titles at director level or above — roles below this threshold carry lower
+# comp ranges outside the Bay Area and get a penalty score adjustment.
+_DIRECTOR_PLUS_TERMS = {
+    "director", "vp", "vice president", "head of", "cto", "chief",
+}
+
+
+def _is_director_plus(title: str) -> bool:
+    t = title.lower()
+    return any(term in t for term in _DIRECTOR_PLUS_TERMS)
+
 
 def passes_hard_filters(posting: dict, profile: dict) -> bool:
     """
@@ -64,6 +87,7 @@ def passes_hard_filters(posting: dict, profile: dict) -> bool:
 
     Checks:
     - exclude_companies (case-insensitive company name match)
+    - exclude_title_keywords (ANY match in title blocks the posting)
     - must_have_keywords (ALL must appear in title + description)
     - location (remote_ok, city_allowlist_international, willing_to_relocate)
 
@@ -74,6 +98,11 @@ def passes_hard_filters(posting: dict, profile: dict) -> bool:
     excluded = {c.lower() for c in profile.get("exclude_companies", [])}
     if company and company in excluded:
         return False
+
+    title_lower = posting.get("title", "").lower()
+    for kw in profile.get("exclude_title_keywords", []):
+        if kw.lower() in title_lower:
+            return False
 
     must_have = profile.get("must_have_keywords", [])
     if must_have:
@@ -164,6 +193,8 @@ def _fmt_profile(profile: dict) -> str:
         lines.append(f"Role type filter (title must include one of): {', '.join(profile['must_have_title_keywords'])}")
     if profile.get("exclude_companies"):
         lines.append(f"Not interested in: {', '.join(profile['exclude_companies'])}")
+    if profile.get("exclude_title_keywords"):
+        lines.append(f"Exclude roles with these words in title: {', '.join(profile['exclude_title_keywords'])}")
     if profile.get("require_english_workplace"):
         lines.append(
             "Requirement: English must be the primary working language. "
@@ -185,7 +216,7 @@ def _fmt_posting(posting: dict) -> str:
         f"URL: {posting.get('url', '')}",
         "",
         "Description:",
-        posting.get("description", "")[:3000],
+        posting.get("description", "")[:15000],
     ]
     return "\n".join(lines)
 
@@ -221,10 +252,15 @@ def score_posting(posting: dict, profile: dict) -> dict:
         rationale = f"Parse error: {raw[:200]}"
 
     location_lower = posting.get("location", "").lower()
-    if any(term in location_lower for term in _BAY_AREA_TERMS):
+    is_bay_area = any(term in location_lower for term in _BAY_AREA_TERMS)
+    if is_bay_area:
         boost = 8
         score = min(100, score + boost)
         rationale = rationale + f" (Bay Area location boost: +{boost})"
+    elif not _is_director_plus(posting.get("title", "")):
+        penalty = 10
+        score = max(0, score - penalty)
+        rationale = rationale + f" (Non-Bay-Area manager-level penalty: -{penalty})"
 
     return {
         **posting,
@@ -234,6 +270,58 @@ def score_posting(posting: dict, profile: dict) -> dict:
         "_output_tokens": result["output_tokens"],
         "_model": result["model"],
     }
+
+
+def _strip_adjustment(score: int, rationale: str) -> tuple[int, str]:
+    """
+    Reverse any previously applied score adjustment suffix, returning
+    (raw_claude_score, clean_rationale) so adjustments can be re-applied fresh.
+    """
+    m = re.search(r' \(Bay Area location boost: \+(\d+)\)$', rationale)
+    if m:
+        return score - int(m.group(1)), rationale[:m.start()]
+    m = re.search(r' \(Non-Bay-Area manager-level penalty: -(\d+)\)$', rationale)
+    if m:
+        return score + int(m.group(1)), rationale[:m.start()]
+    return score, rationale
+
+
+def reapply_adjustments(jobs: list[dict]) -> list[dict]:
+    """
+    Re-apply location/seniority adjustments to already-scored jobs without
+    calling Claude. Strips any existing adjustment suffix, recovers the raw
+    Claude score, then applies current boost/penalty logic.
+
+    Returns only jobs whose score or rationale actually changed.
+    """
+    updated = []
+    for job in jobs:
+        score = job.get("fit_score")
+        rationale = job.get("fit_rationale") or ""
+        if score is None or not rationale:
+            continue
+
+        raw_score, clean_rationale = _strip_adjustment(score, rationale)
+
+        location_lower = job.get("location", "").lower()
+        is_bay_area = any(term in location_lower for term in _BAY_AREA_TERMS)
+
+        if is_bay_area:
+            boost = 8
+            new_score = min(100, raw_score + boost)
+            new_rationale = clean_rationale + f" (Bay Area location boost: +{boost})"
+        elif not _is_director_plus(job.get("title", "")):
+            penalty = 10
+            new_score = max(0, raw_score - penalty)
+            new_rationale = clean_rationale + f" (Non-Bay-Area manager-level penalty: -{penalty})"
+        else:
+            new_score = raw_score
+            new_rationale = clean_rationale
+
+        if new_score != score or new_rationale != rationale:
+            updated.append({**job, "fit_score": new_score, "fit_rationale": new_rationale})
+
+    return updated
 
 
 def score_all(postings: list[dict], profile: dict, threshold: int = 70, on_progress: callable = None, should_stop: callable = None) -> tuple[list[dict], list[dict]]:

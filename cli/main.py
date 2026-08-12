@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from agents import aggregator, scorer, resume_tailor, cover_letter, interview_prep
-from tracker import init_db, upsert_job, update_status, get_job, list_jobs, log_activity, get_scan_dedup_keys
+from tracker import init_db, upsert_job, update_status, update_fit_score, get_job, list_jobs, log_activity, get_scan_dedup_keys
 
 PROFILE_PATH = "data/profile/profile.json"
 RESUME_PATH = "data/profile/resume.txt"
@@ -149,6 +149,29 @@ def prep(job_id):
         "model": usage["model"],
     })
     click.echo(brief)
+
+
+@cli.command()
+def readjust():
+    """Re-apply score adjustments to already-scored jobs without calling Claude.
+
+    Strips any existing Bay Area boost or manager-level penalty from each
+    scored job's rationale, recovers the raw Claude score, then re-applies
+    current adjustment logic. Only jobs whose score or rationale changes
+    are written back to the database.
+    """
+    all_jobs = list_jobs()
+    scored = [j for j in all_jobs if j.get("fit_score") is not None]
+    if not scored:
+        click.echo("No scored jobs found.")
+        return
+
+    updated = scorer.reapply_adjustments(scored)
+    for job in updated:
+        update_fit_score(job["id"], job["fit_score"], job["fit_rationale"])
+        click.echo(f"  {job['company']} - {job['title']} ({job['location']}): score -> {job['fit_score']}")
+
+    click.echo(f"\nUpdated {len(updated)} of {len(scored)} scored job(s).")
 
 
 @cli.command()

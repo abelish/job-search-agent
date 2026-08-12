@@ -22,6 +22,8 @@ fit_rationale TEXT
 status        TEXT    -- new | scored | drafted | submitted | interviewing | rejected | offer
 resume_draft  TEXT
 cover_letter_draft TEXT
+resume_chat   TEXT    -- JSON array of {role, content, created_at} chat turns iterating the resume draft
+cover_letter_chat TEXT -- JSON array of {role, content, created_at} chat turns iterating the cover letter draft
 prep_brief    TEXT
 last_updated  TEXT
 
@@ -37,7 +39,7 @@ created_at    TEXT    -- ISO 8601
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "jobsearch.db"
@@ -58,6 +60,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT DEFAULT 'new',
     resume_draft TEXT,
     cover_letter_draft TEXT,
+    resume_chat TEXT,
+    cover_letter_chat TEXT,
     prep_brief TEXT,
     last_updated TEXT
 );
@@ -72,6 +76,12 @@ CREATE TABLE IF NOT EXISTS activity_log (
 """
 
 VALID_STATUSES = {"new", "dismissed", "scored", "drafted", "submitted", "interviewing", "rejected", "offer"}
+
+# Draft sections that support iterative chat-based revision, and the DB columns backing them.
+CHAT_SECTIONS = {
+    "resume": ("resume_chat", "resume_draft"),
+    "cover_letter": ("cover_letter_chat", "cover_letter_draft"),
+}
 
 # Prices in USD per million tokens — kept in sync with agents/claude_client.py
 _PRICING: dict[str, dict[str, float]] = {
@@ -94,9 +104,19 @@ def _token_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens / 1_000_000 * prices["input"]) + (output_tokens / 1_000_000 * prices["output"])
 
 
+def _migrate_schema(conn: sqlite3.Connection):
+    """Add columns introduced after a DB's initial creation. SQLite's ADD COLUMN
+    has no IF NOT EXISTS clause, so check PRAGMA table_info first."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    for column in ("resume_chat", "cover_letter_chat"):
+        if column not in existing:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
+
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(SCHEMA)
+    _migrate_schema(conn)
     conn.commit()
     conn.close()
 
@@ -188,6 +208,17 @@ def update_status(job_id: str, status: str):
     log_activity("status_change", job_id=job_id, detail={"from": previous, "to": status})
 
 
+def update_fit_score(job_id: str, fit_score: int, fit_rationale: str):
+    """Update only fit_score and fit_rationale for a job, without touching status or last_updated."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE jobs SET fit_score = ?, fit_rationale = ? WHERE id = ?",
+        (fit_score, fit_rationale, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_job(job_id: str) -> dict | None:
     """Fetch a single job row as a dict, or None if not found."""
     conn = sqlite3.connect(DB_PATH)
@@ -195,6 +226,52 @@ def get_job(job_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def get_chat(job_id: str, section: str) -> list[dict]:
+    """Return the chat turns recorded for a draft section ('resume' or 'cover_letter')."""
+    if section not in CHAT_SECTIONS:
+        raise ValueError(f"Invalid section '{section}'. Valid: {sorted(CHAT_SECTIONS)}")
+    chat_column, _ = CHAT_SECTIONS[section]
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(f"SELECT {chat_column} FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return []
+    return json.loads(row[0])
+
+
+def record_chat_turn(job_id: str, section: str, user_message: str, assistant_reply: str, new_draft: str):
+    """
+    Append a user/assistant exchange to a draft section's chat history and store
+    the resulting revised draft. Both writes happen together so the chat log and
+    the draft text never fall out of sync.
+    """
+    if section not in CHAT_SECTIONS:
+        raise ValueError(f"Invalid section '{section}'. Valid: {sorted(CHAT_SECTIONS)}")
+    chat_column, draft_column = CHAT_SECTIONS[section]
+    history = get_chat(job_id, section)
+    now = _now()
+    history.append({"role": "user", "content": user_message, "created_at": now})
+    history.append({"role": "assistant", "content": assistant_reply, "created_at": now})
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        f"UPDATE jobs SET {chat_column} = ?, {draft_column} = ?, last_updated = ? WHERE id = ?",
+        (json.dumps(history), new_draft, now, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_chat(job_id: str, section: str):
+    """Reset a draft section's chat history, leaving the current draft text untouched."""
+    if section not in CHAT_SECTIONS:
+        raise ValueError(f"Invalid section '{section}'. Valid: {sorted(CHAT_SECTIONS)}")
+    chat_column, _ = CHAT_SECTIONS[section]
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(f"UPDATE jobs SET {chat_column} = NULL WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
 
 
 def get_scan_dedup_keys(recency_days: int = 30) -> tuple[set[str], set[str], set[tuple]]:
@@ -243,7 +320,7 @@ def list_activity(limit: int = 100) -> list[dict]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT * FROM activity_log ORDER BY created_at DESC LIMIT ?", (limit,)
+        "SELECT * FROM activity_log ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
     ).fetchall()
     conn.close()
     results = []

@@ -49,17 +49,38 @@ JOBS_CACHE = Path("data/jobs/latest.json")
 # --- HTML utilities ---
 
 class _TextExtractor(HTMLParser):
+    _BLOCK = {"p", "div", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "td", "ul", "ol", "section", "article"}
+    _SKIP  = {"script", "style", "head"}
+
     def __init__(self):
         super().__init__()
         self._parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, _):
+        t = tag.lower()
+        if t in self._SKIP:
+            self._skip_depth += 1
+        if t in self._BLOCK:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag):
+        t = tag.lower()
+        if t in self._SKIP:
+            self._skip_depth = max(0, self._skip_depth - 1)
+        if t in self._BLOCK:
+            self._parts.append("\n")
 
     def handle_data(self, data: str):
-        stripped = data.strip()
-        if stripped:
-            self._parts.append(stripped)
+        if self._skip_depth > 0:
+            return
+        if data.strip():
+            self._parts.append(data)
 
     def get_text(self) -> str:
-        return " ".join(self._parts)
+        text = "".join(self._parts)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
 
 class _LinkExtractor(HTMLParser):
@@ -95,7 +116,11 @@ def _html_to_text(html: str) -> str:
         p.feed(html)
     except Exception:
         pass
-    return p.get_text()
+    text = p.get_text()
+    # Strip any tags that slipped through — handles double-encoded HTML where
+    # &lt;p&gt; gets entity-decoded to literal <p> inside a text node.
+    text = re.sub(r"<[^>]{1,200}>", "", text)
+    return text.strip()
 
 
 # --- Shared helpers ---
@@ -195,8 +220,11 @@ def fetch_lever(company: str) -> list[dict]:
 
 def fetch_ashby(job_board_name: str) -> list[dict]:
     """
-    Ashby public job board API.
+    Ashby public job board API (v1).
     https://api.ashbyhq.com/posting-api/job-board/{job_board_name}
+
+    API v1 schema (current): top-level keys are "jobs" and "apiVersion".
+    Legacy schema had "jobPostings" and "organization"; both are supported.
     """
     resp = requests.get(
         f"https://api.ashbyhq.com/posting-api/job-board/{job_board_name}",
@@ -205,24 +233,37 @@ def fetch_ashby(job_board_name: str) -> list[dict]:
     resp.raise_for_status()
     data = resp.json()
 
+    # v1 API drops the organization wrapper; fall back to board name.
     org = data.get("organization") or {}
     company = org.get("name") or job_board_name.replace("-", " ").title()
     fetched = _now()
 
+    # v1 uses "jobs"; legacy used "jobPostings".
+    job_list = data.get("jobs") or data.get("jobPostings") or []
+
     postings = []
-    for job in data.get("jobPostings", []):
+    for job in job_list:
         url = job.get("jobUrl", "")
         if not url:
             continue
+        if not job.get("isListed", True):
+            continue
+        # v1: location is a plain string; legacy: locationName.
+        location = job.get("location") or job.get("locationName", "")
+        # v1: publishedAt is an ISO timestamp; legacy: publishedDate is a date string.
+        published = job.get("publishedAt") or job.get("publishedDate", "")
+        posted_date = published[:10] if published else ""
+        # v1 exposes descriptionPlain; fall back to stripping descriptionHtml.
+        description = job.get("descriptionPlain") or _html_to_text(job.get("descriptionHtml", ""))
         postings.append({
             "id": _make_id("ashby", url),
             "source": "ashby",
             "title": job.get("title", ""),
             "company": company,
-            "location": job.get("locationName", ""),
+            "location": location,
             "url": url,
-            "description": _html_to_text(job.get("descriptionHtml", "")),
-            "posted_date": job.get("publishedDate", ""),
+            "description": description,
+            "posted_date": posted_date,
             "fetched_date": fetched,
         })
     return postings
@@ -280,7 +321,7 @@ def _gmail_html_body(token: str, message_id: str) -> str:
 
 
 _LINKEDIN_JOB_RE = re.compile(r"linkedin\.com/(?:comm/)?jobs/view/(\d+)")
-_INDEED_JOB_RE = re.compile(r"indeed\.com/(?:viewjob\?jk=|rc/clk\?jk=)(\w+)")
+_INDEED_JOB_RE = re.compile(r"indeed\.com/(?:viewjob\?jk=|rc/clk(?:/\w+)?\?jk=)(\w+)")
 _JSONLD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.DOTALL | re.IGNORECASE,
@@ -486,7 +527,7 @@ def fetch_gmail_alerts(days_back: int = 7) -> list[dict]:
         except Exception as e:
             print(f"  Gmail LinkedIn msg {msg_id}: {e}", file=sys.stderr)
 
-    indeed_query = f"from:(alert@indeed.com OR jobalert@indeed.com) after:{after}"
+    indeed_query = f"from:(alert@indeed.com OR jobalert@indeed.com OR donotreply@jobalert.indeed.com OR donotreply@match.indeed.com) after:{after}"
     for msg_id in _gmail_search(token, indeed_query):
         try:
             html = _gmail_html_body(token, msg_id)
@@ -639,14 +680,26 @@ def fetch_arbeitsagentur(location: str = "Berlin", radius_km: int = 25) -> list[
 def _source_warning(label: str, exc: Exception) -> str:
     """Convert a fetch exception into a user-facing warning string."""
     msg = str(exc)
-    if "400" in msg:
-        return f"{label}: 400 Bad Request — check your API key value and try re-copying it from browser DevTools"
-    if "401" in msg:
-        return f"{label}: 401 Unauthorized — credentials rejected"
-    if "403" in msg:
-        return f"{label}: 403 Forbidden — API key may be invalid or expired"
-    if "404" in msg:
-        return f"{label}: 404 Not Found — check the board slug or company name"
+
+    if label.startswith("Gmail"):
+        if "400" in msg:
+            return f"{label}: 400 Bad Request — refresh token likely expired or revoked, re-run get_gmail_token.py"
+        if "401" in msg:
+            return f"{label}: 401 Unauthorized — GMAIL_CLIENT_ID/SECRET rejected, check they match the OAuth client in Google Cloud Console"
+        if "403" in msg:
+            return f"{label}: 403 Forbidden — Gmail API may not be enabled on the project, or the OAuth consent screen needs re-approval"
+        return f"{label}: {msg}"
+
+    if label.startswith("Arbeitsagentur"):
+        if "400" in msg or "403" in msg:
+            return f"{label}: {msg.split(':', 1)[0] if ':' in msg else msg} — check ARBEITSAGENTUR_API_KEY and try re-copying the X-API-Key header from browser DevTools"
+        if "404" in msg:
+            return f"{label}: 404 Not Found — check ARBEITSAGENTUR_LOCATION"
+        return f"{label}: {msg}"
+
+    # Greenhouse, Lever, Ashby, SmartRecruiters: public APIs, no API key involved
+    if "400" in msg or "404" in msg:
+        return f"{label}: {msg} — check the board token/company slug is correct"
     return f"{label}: {msg}"
 
 

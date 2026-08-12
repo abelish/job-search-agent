@@ -8,6 +8,7 @@ Or via CLI:
   python -m cli.main serve
 """
 
+import difflib
 import json
 import threading
 from pathlib import Path
@@ -18,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from tracker import (
+    clear_chat,
+    get_chat,
     get_scan_dedup_keys,
     get_job,
     get_stats,
@@ -26,8 +29,10 @@ from tracker import (
     list_activity,
     list_jobs,
     log_activity,
+    record_chat_turn,
     update_status,
     upsert_job,
+    CHAT_SECTIONS,
     VALID_STATUSES,
 )
 
@@ -114,6 +119,61 @@ def api_update_draft(job_id: str, body: DraftUpdate):
     if changed:
         upsert_job(job)
         log_activity("draft_generated", job_id=job_id, detail={"edited_fields": list(changed.keys()), "source": "manual_edit"})
+    return {"ok": True}
+
+
+class ChatMessage(BaseModel):
+    message: str
+
+
+@app.get("/api/jobs/{job_id}/chat/{section}")
+def api_get_chat(job_id: str, section: str):
+    if section not in CHAT_SECTIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid section. Valid: {sorted(CHAT_SECTIONS)}")
+    if not get_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"messages": get_chat(job_id, section)}
+
+
+@app.post("/api/jobs/{job_id}/chat/{section}")
+def api_post_chat(job_id: str, section: str, body: ChatMessage):
+    """Send feedback on a drafted resume or cover letter and get back a revised draft."""
+    from agents import resume_tailor, cover_letter as cl_agent
+
+    if section not in CHAT_SECTIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid section. Valid: {sorted(CHAT_SECTIONS)}")
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    _, draft_column = CHAT_SECTIONS[section]
+    current_draft = job.get(draft_column)
+    if not current_draft:
+        raise HTTPException(status_code=400, detail="Generate a draft first before iterating on it.")
+
+    if section == "resume":
+        reply, revised, usage = resume_tailor.revise_resume(job, RESUME_PATH.read_text(), current_draft, body.message)
+    else:
+        profile = _load_profile()
+        reply, revised, usage = cl_agent.revise_cover_letter(job, profile, current_draft, body.message)
+
+    record_chat_turn(job_id, section, body.message, reply, revised)
+    log_activity("draft_revised", job_id=job_id, detail={
+        "section": section,
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+        "model": usage["model"],
+    })
+    return {"reply": reply, "draft": revised, "messages": get_chat(job_id, section)}
+
+
+@app.delete("/api/jobs/{job_id}/chat/{section}")
+def api_clear_chat(job_id: str, section: str):
+    if section not in CHAT_SECTIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid section. Valid: {sorted(CHAT_SECTIONS)}")
+    if not get_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+    clear_chat(job_id, section)
     return {"ok": True}
 
 
@@ -249,6 +309,61 @@ def api_generate_draft(job_id: str):
         "model": resume_usage["model"],
     })
     return get_job(job_id)
+
+
+@app.get("/api/jobs/{job_id}/resume-diff")
+def api_resume_diff(job_id: str):
+    """
+    Line-level diff of the original resume vs. the tailored draft.
+    Returns a list of {type, text} objects where type is 'added', 'removed', or 'unchanged'.
+    """
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.get("resume_draft"):
+        raise HTTPException(status_code=404, detail="No resume draft.")
+    if not RESUME_PATH.exists():
+        raise HTTPException(status_code=404, detail="Original resume not found.")
+
+    original = RESUME_PATH.read_text(encoding="utf-8").splitlines()
+    draft = job["resume_draft"].splitlines()
+
+    # Use SequenceMatcher so we can apply a similarity threshold.
+    # Lines with >90% character similarity are treated as unchanged — this
+    # suppresses noise from minor punctuation/whitespace normalization that
+    # Claude commonly introduces. Only lines with substantive wording changes
+    # (or lines that are entirely new/removed) are flagged.
+    SIMILARITY_THRESHOLD = 0.90
+
+    lines = []
+    matcher = difflib.SequenceMatcher(None, original, draft, autojunk=False)
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        if op == "equal":
+            for line in original[i1:i2]:
+                lines.append({"type": "unchanged", "text": line})
+        elif op == "insert":
+            for line in draft[j1:j2]:
+                lines.append({"type": "added", "text": line})
+        elif op == "delete":
+            for line in original[i1:i2]:
+                lines.append({"type": "removed", "text": line})
+        elif op == "replace":
+            orig_block = original[i1:i2]
+            new_block = draft[j1:j2]
+            for orig_line, new_line in zip(orig_block, new_block):
+                ratio = difflib.SequenceMatcher(None, orig_line, new_line).ratio()
+                if ratio >= SIMILARITY_THRESHOLD:
+                    lines.append({"type": "unchanged", "text": new_line})
+                else:
+                    lines.append({"type": "removed", "text": orig_line})
+                    lines.append({"type": "added", "text": new_line})
+            # Handle block size mismatch (more orig lines than new or vice versa)
+            for line in orig_block[len(new_block):]:
+                lines.append({"type": "removed", "text": line})
+            for line in new_block[len(orig_block):]:
+                lines.append({"type": "added", "text": line})
+
+    return {"lines": lines}
 
 
 @app.post("/api/jobs/{job_id}/generate-prep")

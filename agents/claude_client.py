@@ -8,6 +8,7 @@ in one place.
 """
 
 import os
+import re
 from anthropic import Anthropic
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -61,3 +62,21 @@ def complete(prompt: str, system: str = "", model: str = DEFAULT_MODEL, max_toke
         "output_tokens": response.usage.output_tokens,
         "model": model,
     }
+
+
+def parse_reply_and_draft(text: str) -> tuple[str, str]:
+    """
+    Split a completion formatted as:
+      <reply>...conversational acknowledgment...</reply>
+      <draft>...full revised document text...</draft>
+    into (reply, draft).
+
+    Falls back to treating the whole response as the draft if the model
+    didn't follow the tag format, so a malformed response still updates
+    the draft instead of failing the request outright.
+    """
+    reply_match = re.search(r"<reply>([\s\S]*?)</reply>", text)
+    draft_match = re.search(r"<draft>([\s\S]*?)</draft>", text)
+    if reply_match and draft_match:
+        return reply_match.group(1).strip(), draft_match.group(1).strip()
+    return "Updated the draft.", text.strip()

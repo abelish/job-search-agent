@@ -492,6 +492,11 @@ def _parse_indeed_email(html: str, fetched: str) -> list[dict]:
     Location") or live in the next two plain <p> tags after the anchor
     (current format). Pairs the latter by document position, bounded by the
     next job's anchor so postings don't bleed into each other.
+
+    Indeed emails never include a full description, but the current format's
+    job card carries a salary badge (e.g. "$230,000 - $290,000 a year"). That
+    gets seeded into `description` as the only signal the scorer has for
+    compensation, since it would otherwise be silently dropped.
     """
     candidates: list[tuple[int, int, str, str]] = []
     for m in _INDEED_A_RE.finditer(html):
@@ -511,16 +516,16 @@ def _parse_indeed_email(html: str, fetched: str) -> list[dict]:
             continue
         seen.add(jk)
         title, company, location = _split_gmail_job_text(text)
+        window_end = candidates[i + 1][0] if i + 1 < len(candidates) else len(html)
+        window_paras = [p_text for p_pos, p_text in paras if end < p_pos < window_end]
         if not company:
-            window_end = candidates[i + 1][0] if i + 1 < len(candidates) else len(html)
-            found = [
-                p_text for p_pos, p_text in paras
-                if end < p_pos < window_end and not _is_indeed_noise_para(p_text)
-            ][:2]
+            found = [p for p in window_paras if not _is_indeed_noise_para(p)][:2]
             if found:
                 company = found[0]
             if len(found) > 1:
                 location = found[1]
+        salary = next((p for p in window_paras if p.startswith("$")), "")
+        description = f"Compensation: {salary}" if salary else ""
         url = f"https://www.indeed.com/viewjob?jk={jk}"
         postings.append({
             "id": _make_id("indeed_email", url),
@@ -529,7 +534,7 @@ def _parse_indeed_email(html: str, fetched: str) -> list[dict]:
             "company": company,
             "location": location,
             "url": url,
-            "description": "",
+            "description": description,
             "posted_date": "",
             "fetched_date": fetched,
         })

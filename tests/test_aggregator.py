@@ -298,7 +298,7 @@ def test_parse_indeed_email_rc_clk_dl_url():
     assert "abc123def4567890" in result[0]["url"]
 
 
-def test_parse_indeed_email_skips_salary_badge_paragraph():
+def test_parse_indeed_email_captures_salary_into_description():
     html = (
         '<h2><a href="https://www.indeed.com/rc/clk/dl?jk=abc123def4567890">Eng Lead</a></h2>'
         "<p>Acme Corp</p>"
@@ -309,6 +309,18 @@ def test_parse_indeed_email_skips_salary_badge_paragraph():
     result = _parse_indeed_email(html, FETCHED)
     assert result[0]["company"] == "Acme Corp"
     assert result[0]["location"] == "Austin, TX"
+    assert result[0]["description"] == "Compensation: $150,000 - $200,000 a year"
+
+
+def test_parse_indeed_email_no_salary_leaves_description_blank():
+    html = (
+        '<h2><a href="https://www.indeed.com/rc/clk/dl?jk=abc123def4567890">Eng Lead</a></h2>'
+        "<p>Acme Corp</p>"
+        "<p>Austin, TX</p>"
+        "<p>Just posted</p>"
+    )
+    result = _parse_indeed_email(html, FETCHED)
+    assert result[0]["description"] == ""
 
 
 def test_parse_indeed_email_recommended_jobs_pagead_format():

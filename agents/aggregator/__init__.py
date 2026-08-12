@@ -83,31 +83,6 @@ class _TextExtractor(HTMLParser):
         return text.strip()
 
 
-class _LinkExtractor(HTMLParser):
-    """Extracts (href, link_text) pairs from HTML."""
-
-    def __init__(self):
-        super().__init__()
-        self.links: list[tuple[str, str]] = []
-        self._href: str | None = None
-        self._buf: list[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "a":
-            self._href = dict(attrs).get("href", "")
-            self._buf = []
-
-    def handle_endtag(self, tag):
-        if tag == "a" and self._href is not None:
-            self.links.append((self._href, " ".join(self._buf).strip()))
-            self._href = None
-            self._buf = []
-
-    def handle_data(self, data: str):
-        if self._href is not None:
-            self._buf.append(data.strip())
-
-
 def _html_to_text(html: str) -> str:
     if not html:
         return ""
@@ -322,6 +297,25 @@ def _gmail_html_body(token: str, message_id: str) -> str:
 
 _LINKEDIN_JOB_RE = re.compile(r"linkedin\.com/(?:comm/)?jobs/view/(\d+)")
 _INDEED_JOB_RE = re.compile(r"indeed\.com/(?:viewjob\?jk=|rc/clk(?:/\w+)?\?jk=)(\w+)")
+
+# The "recommended jobs" digest links through a sponsored pagead/clk redirect
+# instead of a direct ?jk= link. Its jrtk= param embeds the same job key as
+# its final hyphen-separated segment, e.g.
+# jrtk=5-cmh1-1-1jvpi1ejglia5807-39795eaee9ed8f65 -> 39795eaee9ed8f65
+_INDEED_JRTK_RE = re.compile(r"[?&]jrtk=([^&\"]+)")
+
+
+def _indeed_job_key(href: str) -> str | None:
+    """Extract a stable Indeed job key from a link href, or None if not a job link."""
+    m = _INDEED_JOB_RE.search(href)
+    if m:
+        return m.group(1)
+    m = _INDEED_JRTK_RE.search(href)
+    if m:
+        segment = m.group(1).rsplit("-", 1)[-1]
+        if re.fullmatch(r"[0-9a-f]{16}", segment):
+            return segment
+    return None
 _JSONLD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.DOTALL | re.IGNORECASE,
@@ -469,24 +463,65 @@ def _parse_linkedin_email(html: str, fetched: str) -> list[dict]:
     return postings
 
 
+_INDEED_A_RE = re.compile(r'<a\b[^>]*href="([^"]*)"[^>]*>(.*?)</a>', re.DOTALL | re.IGNORECASE)
+
+# Matches plain-text paragraphs: <p ...>TEXT</p> with no nested tags.
+# Current-format Indeed alert emails put company and location in two of these,
+# immediately after the title link, rather than bundling them into the anchor
+# text like the older digest format (handled by _split_gmail_job_text).
+_INDEED_PARA_RE = re.compile(r'<p\b[^>]*>([^<]+)</p>', re.IGNORECASE)
+
+
+def _is_indeed_noise_para(text: str) -> bool:
+    """True for paragraphs that are salary/recency badges, not company or location."""
+    t = text.strip()
+    if not t:
+        return True
+    tl = t.lower()
+    return t.startswith("$") or "ago" in tl or "posted" in tl or tl in ("today", "yesterday")
+
+
 def _parse_indeed_email(html: str, fetched: str) -> list[dict]:
-    parser = _LinkExtractor()
-    try:
-        parser.feed(html)
-    except Exception:
-        pass
+    """
+    Parse Indeed job alert digest emails, including both the saved-alert
+    format (direct ?jk= links) and the "recommended jobs" format (sponsored
+    pagead/clk links whose job key is embedded in the jrtk= param).
+
+    Titles live in <a href="...">Title</a> anchors. Company and location are
+    either bundled into the anchor text (older format, "Title    Company -
+    Location") or live in the next two plain <p> tags after the anchor
+    (current format). Pairs the latter by document position, bounded by the
+    next job's anchor so postings don't bleed into each other.
+    """
+    candidates: list[tuple[int, int, str, str]] = []
+    for m in _INDEED_A_RE.finditer(html):
+        jk = _indeed_job_key(m.group(1))
+        if not jk:
+            continue
+        text = _html_to_text(m.group(2)).strip()
+        if text:
+            candidates.append((m.start(), m.end(), jk, text))
+
+    paras = [(m.start(), m.group(1).strip()) for m in _INDEED_PARA_RE.finditer(html)]
+
     seen: set[str] = set()
     postings = []
-    for href, text in parser.links:
-        m = _INDEED_JOB_RE.search(href)
-        if not m or not text.strip():
-            continue
-        jk = m.group(1)
+    for i, (_start, end, jk, text) in enumerate(candidates):
         if jk in seen:
             continue
         seen.add(jk)
-        url = f"https://www.indeed.com/viewjob?jk={jk}"
         title, company, location = _split_gmail_job_text(text)
+        if not company:
+            window_end = candidates[i + 1][0] if i + 1 < len(candidates) else len(html)
+            found = [
+                p_text for p_pos, p_text in paras
+                if end < p_pos < window_end and not _is_indeed_noise_para(p_text)
+            ][:2]
+            if found:
+                company = found[0]
+            if len(found) > 1:
+                location = found[1]
+        url = f"https://www.indeed.com/viewjob?jk={jk}"
         postings.append({
             "id": _make_id("indeed_email", url),
             "source": "indeed_email",

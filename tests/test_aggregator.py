@@ -14,6 +14,7 @@ from agents.aggregator import (
     _split_gmail_job_text,
     _parse_linkedin_email,
     _parse_indeed_email,
+    _indeed_job_key,
     fetch_greenhouse,
     fetch_lever,
     fetch_ashby,
@@ -277,6 +278,104 @@ def test_parse_indeed_email_deduplicates():
 def test_parse_indeed_email_no_jobs():
     result = _parse_indeed_email("<p>Nothing</p>", FETCHED)
     assert result == []
+
+
+def test_parse_indeed_email_rc_clk_dl_url():
+    # Current Indeed alert template: rc/clk/dl (with the extra /dl segment),
+    # company and location as separate sibling <p> tags rather than bundled
+    # into the anchor text.
+    html = (
+        '<h2><a href="https://www.indeed.com/rc/clk/dl?jk=abc123def4567890&from=ja">'
+        "Director of Engineering</a></h2>"
+        "<p>Acme Corp</p>"
+        "<p>Austin, TX</p>"
+    )
+    result = _parse_indeed_email(html, FETCHED)
+    assert len(result) == 1
+    assert result[0]["title"] == "Director of Engineering"
+    assert result[0]["company"] == "Acme Corp"
+    assert result[0]["location"] == "Austin, TX"
+    assert "abc123def4567890" in result[0]["url"]
+
+
+def test_parse_indeed_email_skips_salary_badge_paragraph():
+    html = (
+        '<h2><a href="https://www.indeed.com/rc/clk/dl?jk=abc123def4567890">Eng Lead</a></h2>'
+        "<p>Acme Corp</p>"
+        "<p>Austin, TX</p>"
+        "<p>$150,000 - $200,000 a year</p>"
+        "<p>Just posted</p>"
+    )
+    result = _parse_indeed_email(html, FETCHED)
+    assert result[0]["company"] == "Acme Corp"
+    assert result[0]["location"] == "Austin, TX"
+
+
+def test_parse_indeed_email_recommended_jobs_pagead_format():
+    # "Recommended jobs" digest links through a sponsored pagead/clk redirect
+    # instead of a direct ?jk= link; the job key is the final hyphen-separated
+    # segment of jrtk=.
+    html = (
+        '<h2><a href="https://www.indeed.com/pagead/clk/dl?from=jobi2a_multijob'
+        '&jrtk=5-cmh1-1-1jvpi1ejglia5807-abcdef0123456789&rm=2">'
+        "Principal Engineer</a></h2>"
+        "<p>Foo Inc</p>"
+        "<p>Remote</p>"
+    )
+    result = _parse_indeed_email(html, FETCHED)
+    assert len(result) == 1
+    assert result[0]["title"] == "Principal Engineer"
+    assert result[0]["company"] == "Foo Inc"
+    assert result[0]["location"] == "Remote"
+    assert result[0]["url"] == "https://www.indeed.com/viewjob?jk=abcdef0123456789"
+
+
+def test_parse_indeed_email_multiple_cards_dont_bleed_together():
+    html = (
+        '<h2><a href="https://www.indeed.com/rc/clk/dl?jk=1111111111111111">Job One</a></h2>'
+        "<p>Company One</p>"
+        "<p>City One</p>"
+        '<h2><a href="https://www.indeed.com/rc/clk/dl?jk=2222222222222222">Job Two</a></h2>'
+        "<p>Company Two</p>"
+        "<p>City Two</p>"
+    )
+    result = _parse_indeed_email(html, FETCHED)
+    assert len(result) == 2
+    assert result[0]["company"] == "Company One"
+    assert result[0]["location"] == "City One"
+    assert result[1]["company"] == "Company Two"
+    assert result[1]["location"] == "City Two"
+
+
+# ---------------------------------------------------------------------------
+# _indeed_job_key
+# ---------------------------------------------------------------------------
+
+def test_indeed_job_key_viewjob():
+    assert _indeed_job_key("https://www.indeed.com/viewjob?jk=abc123xyz") == "abc123xyz"
+
+
+def test_indeed_job_key_rc_clk_dl():
+    href = "https://www.indeed.com/rc/clk/dl?jk=f8b00095fea80694&from=ja"
+    assert _indeed_job_key(href) == "f8b00095fea80694"
+
+
+def test_indeed_job_key_pagead_jrtk():
+    href = (
+        "https://www.indeed.com/pagead/clk/dl?from=jobi2a_multijob"
+        "&jrtk=5-cmh1-1-1jvpi1ejglia5807-39795eaee9ed8f65&rm=2"
+    )
+    assert _indeed_job_key(href) == "39795eaee9ed8f65"
+
+
+def test_indeed_job_key_jrtk_non_hex_segment_ignored():
+    # If the trailing jrtk segment isn't a 16-char hex job key, don't guess.
+    href = "https://www.indeed.com/pagead/clk/dl?jrtk=5-cmh1-1-notahexkey"
+    assert _indeed_job_key(href) is None
+
+
+def test_indeed_job_key_non_job_link():
+    assert _indeed_job_key("https://www.indeed.com/legal?hl=en") is None
 
 
 # ---------------------------------------------------------------------------

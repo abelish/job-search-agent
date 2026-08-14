@@ -4,7 +4,7 @@
 
 A local, CLI-driven system that automates the job search pipeline end to end:
 
-1. Pull job postings from Greenhouse, Lever, and Ashby company career APIs, plus parsed LinkedIn and Indeed job alert emails (via Gmail).
+1. Pull job postings from Greenhouse, Lever, Ashby, and SmartRecruiters company career APIs, the Bundesagentur für Arbeit job board, parsed LinkedIn and Indeed job alert emails (via Gmail), or add a single posting manually by URL for jobs found elsewhere.
 2. Score each posting against a stored profile for fit (skills, seniority, comp floor, location).
 3. Draft a tailored resume and cover letter for postings that pass the fit threshold.
 4. Track every application through a SQLite database (drafted, submitted, interviewing, rejected, offer).
@@ -35,8 +35,8 @@ Secondary goal: this codebase should be clean enough to extend into a real produ
 - `agents/cover_letter/` — drafts cover letter / "why this company" per posting
 - `agents/interview_prep/` — generates prep briefs once status hits "interviewing"
 - `tracker/` — SQLite schema and access layer, the source of truth for application state
-- `server/` — FastAPI app and static dashboard; exposes action endpoints (`/api/scan`, `/api/score`, `/api/jobs/{id}/generate-draft`, `/api/jobs/{id}/generate-prep`) so all Claude-powered steps can be triggered from the UI
-- `cli/` — entry point: `jobsearch scan`, `jobsearch score`, `jobsearch draft <id>`, `jobsearch prep <id>`, `jobsearch track <id> <status>`, `jobsearch serve`
+- `server/` — FastAPI app and static dashboard; exposes action endpoints (`/api/scan`, `/api/jobs/manual`, `/api/score`, `/api/jobs/{id}/generate-draft`, `/api/jobs/{id}/generate-prep`) so all pipeline steps can be triggered from the UI
+- `cli/` — entry point: `jobsearch scan`, `jobsearch score`, `jobsearch list [--status]`, `jobsearch draft <id>`, `jobsearch prep <id>`, `jobsearch track <id> <status>`, `jobsearch readjust`, `jobsearch serve`
 - `data/profile/` — resume, target roles, comp floor, location constraints
 - `data/jobs/` — local cache of normalized job postings (gitignored, not committed)
 

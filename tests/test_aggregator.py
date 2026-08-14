@@ -15,9 +15,12 @@ from agents.aggregator import (
     _parse_linkedin_email,
     _parse_indeed_email,
     _indeed_job_key,
+    _extract_jsonld_jobposting,
     fetch_greenhouse,
     fetch_lever,
     fetch_ashby,
+    fetch_manual_url,
+    normalize_manual_posting,
 )
 
 
@@ -558,3 +561,136 @@ def test_fetch_ashby_falls_back_to_board_name_for_company():
     with patch("agents.aggregator.requests.get", return_value=resp):
         result = fetch_ashby("open-ai")
     assert result[0]["company"] == "Open Ai"
+
+
+# ---------------------------------------------------------------------------
+# _extract_jsonld_jobposting
+# ---------------------------------------------------------------------------
+
+def test_extract_jsonld_jobposting_bare_object():
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type": "JobPosting", "title": "Engineer", "description": "Great role."}'
+        "</script>"
+    )
+    result = _extract_jsonld_jobposting(html)
+    assert result["title"] == "Engineer"
+
+
+def test_extract_jsonld_jobposting_inside_list():
+    html = (
+        '<script type="application/ld+json">'
+        '[{"@type": "WebPage"}, {"@type": "JobPosting", "title": "Director"}]'
+        "</script>"
+    )
+    result = _extract_jsonld_jobposting(html)
+    assert result["title"] == "Director"
+
+
+def test_extract_jsonld_jobposting_absent():
+    assert _extract_jsonld_jobposting("<p>No structured data here.</p>") is None
+
+
+def test_extract_jsonld_jobposting_malformed_json_ignored():
+    html = '<script type="application/ld+json">{not valid json</script>'
+    assert _extract_jsonld_jobposting(html) is None
+
+
+# ---------------------------------------------------------------------------
+# fetch_manual_url
+# ---------------------------------------------------------------------------
+
+def _mock_html_response(html, status=200):
+    m = MagicMock()
+    m.status_code = status
+    m.text = html
+    m.raise_for_status = MagicMock()
+    return m
+
+
+def test_fetch_manual_url_from_jsonld():
+    html = (
+        '<script type="application/ld+json">{'
+        '"@type": "JobPosting", "title": "Director of Engineering",'
+        '"hiringOrganization": {"name": "Acme Corp"},'
+        '"jobLocation": {"address": {"addressLocality": "Austin", "addressRegion": "TX"}},'
+        '"description": "<p>Lead the platform team.</p>"'
+        "}</script>"
+    )
+    with patch("agents.aggregator.requests.get", return_value=_mock_html_response(html)):
+        result = fetch_manual_url("https://example.com/job/123")
+    assert result["title"] == "Director of Engineering"
+    assert result["company"] == "Acme Corp"
+    assert result["location"] == "Austin, TX"
+    assert "Lead the platform team" in result["description"]
+
+
+def test_fetch_manual_url_jsonld_hiring_organization_as_string():
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type": "JobPosting", "title": "Engineer", "hiringOrganization": "Acme Corp"}'
+        "</script>"
+    )
+    with patch("agents.aggregator.requests.get", return_value=_mock_html_response(html)):
+        result = fetch_manual_url("https://example.com/job/456")
+    assert result["company"] == "Acme Corp"
+
+
+def test_fetch_manual_url_jsonld_telecommute_location():
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type": "JobPosting", "title": "Engineer", "jobLocationType": "TELECOMMUTE"}'
+        "</script>"
+    )
+    with patch("agents.aggregator.requests.get", return_value=_mock_html_response(html)):
+        result = fetch_manual_url("https://example.com/job/789")
+    assert result["location"] == "Remote"
+
+
+def test_fetch_manual_url_falls_back_to_title_tag_and_page_text():
+    html = "<html><head><title>Director of Engineering - Acme</title></head><body><p>We are hiring.</p></body></html>"
+    with patch("agents.aggregator.requests.get", return_value=_mock_html_response(html)):
+        result = fetch_manual_url("https://example.com/careers/job")
+    assert result["title"] == "Director of Engineering - Acme"
+    assert result["company"] == ""
+    assert result["location"] == ""
+    assert "We are hiring" in result["description"]
+
+
+def test_fetch_manual_url_description_fallback_is_truncated():
+    html = "<html><head><title>Job</title></head><body><p>" + ("word " * 5000) + "</p></body></html>"
+    with patch("agents.aggregator.requests.get", return_value=_mock_html_response(html)):
+        result = fetch_manual_url("https://example.com/careers/long-job")
+    assert len(result["description"]) <= 8000
+
+
+def test_fetch_manual_url_propagates_fetch_failure():
+    resp = MagicMock()
+    resp.raise_for_status.side_effect = Exception("403 Client Error: Forbidden")
+    with patch("agents.aggregator.requests.get", return_value=resp):
+        with pytest.raises(Exception, match="403"):
+            fetch_manual_url("https://example.com/blocked")
+
+
+# ---------------------------------------------------------------------------
+# normalize_manual_posting
+# ---------------------------------------------------------------------------
+
+def test_normalize_manual_posting_shape():
+    result = normalize_manual_posting(
+        "https://example.com/job/1", "  Director of Engineering  ", " Acme Corp ", " Austin, TX ", " Great role. "
+    )
+    assert result["source"] == "manual"
+    assert result["title"] == "Director of Engineering"
+    assert result["company"] == "Acme Corp"
+    assert result["location"] == "Austin, TX"
+    assert result["description"] == "Great role."
+    assert result["url"] == "https://example.com/job/1"
+    assert result["posted_date"] == ""
+    assert len(result["id"]) == 12
+
+
+def test_normalize_manual_posting_stable_id_for_same_url():
+    a = normalize_manual_posting("https://example.com/job/1", "Title A", "", "", "")
+    b = normalize_manual_posting("https://example.com/job/1", "Title B", "Different Co", "", "")
+    assert a["id"] == b["id"]

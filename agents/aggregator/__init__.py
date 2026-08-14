@@ -6,12 +6,13 @@ Pulls job postings from:
 - Lever job board API (public, per company)
 - Ashby job board API (public, per company)
 - Gmail job alert emails (LinkedIn, Indeed) via Gmail API, read-only scope
+- Manual entry: a single URL pasted by the user, best-effort scraped
 
 Normalizes everything into one schema:
 
 {
     "id": str,            # stable sha1 of source + url (12 hex chars)
-    "source": str,        # "greenhouse" | "lever" | "ashby" | "linkedin_email" | "indeed_email"
+    "source": str,        # "greenhouse" | "lever" | "ashby" | "linkedin_email" | "indeed_email" | "manual"
     "title": str,
     "company": str,
     "location": str,
@@ -337,6 +338,24 @@ _LI_DESC_RE = re.compile(
 )
 
 
+def _extract_jsonld_jobposting(html: str) -> dict | None:
+    """
+    Return the first schema.org JobPosting object found in a page's
+    <script type="application/ld+json"> blocks, or None if there isn't one.
+    Handles both a bare JobPosting object and one inside a JSON-LD list.
+    """
+    for m in _JSONLD_RE.finditer(html):
+        try:
+            data = json.loads(m.group(1))
+            if isinstance(data, list):
+                data = next((d for d in data if d.get("@type") == "JobPosting"), None)
+            if isinstance(data, dict) and data.get("@type") == "JobPosting":
+                return data
+        except Exception:
+            continue
+    return None
+
+
 def _fetch_description_from_page(url: str) -> str:
     """
     Fetch a public job posting page and extract the description.
@@ -348,18 +367,9 @@ def _fetch_description_from_page(url: str) -> str:
     resp.raise_for_status()
     html = resp.text
 
-    # Try JSON-LD first (Indeed and others)
-    for m in _JSONLD_RE.finditer(html):
-        try:
-            data = json.loads(m.group(1))
-            if isinstance(data, list):
-                data = next((d for d in data if d.get("@type") == "JobPosting"), {})
-            if data.get("@type") == "JobPosting":
-                desc = data.get("description", "")
-                if desc:
-                    return _html_to_text(desc)
-        except Exception:
-            continue
+    posting = _extract_jsonld_jobposting(html)
+    if posting and posting.get("description"):
+        return _html_to_text(posting["description"])
 
     # Fallback: LinkedIn serves description in show-more-less-html__markup
     m = _LI_DESC_RE.search(html)
@@ -713,6 +723,83 @@ def fetch_arbeitsagentur(location: str = "Berlin", radius_km: int = 25) -> list[
             "fetched_date": fetched,
         })
     return postings
+
+
+# --- Manual entry ---
+
+_TITLE_TAG_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.DOTALL | re.IGNORECASE)
+
+
+def _jsonld_company(posting: dict) -> str:
+    org = posting.get("hiringOrganization")
+    if isinstance(org, dict):
+        return org.get("name", "")
+    if isinstance(org, str):
+        return org
+    return ""
+
+
+def _jsonld_location(posting: dict) -> str:
+    if posting.get("jobLocationType") == "TELECOMMUTE":
+        return "Remote"
+    loc = posting.get("jobLocation")
+    if isinstance(loc, list):
+        loc = loc[0] if loc else None
+    if not isinstance(loc, dict):
+        return ""
+    address = loc.get("address")
+    if not isinstance(address, dict):
+        return ""
+    parts = [address.get("addressLocality", ""), address.get("addressRegion", "")]
+    return ", ".join(p for p in parts if p)
+
+
+def fetch_manual_url(url: str) -> dict:
+    """
+    Best-effort fetch of a single job posting URL pasted by the user.
+    Tries schema.org JobPosting JSON-LD first; falls back to the page
+    <title> tag and a truncated dump of the page's visible text when no
+    structured data is present. Returns whatever it can find, even if
+    some or all fields end up empty — the caller lets the user fill in
+    or correct anything before saving.
+
+    Raises on an actual fetch failure (network error, non-2xx response)
+    so the caller can surface that distinctly from "nothing found".
+    """
+    resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=15)
+    resp.raise_for_status()
+    html = resp.text
+
+    posting = _extract_jsonld_jobposting(html)
+    if posting:
+        title = posting.get("title", "")
+        company = _jsonld_company(posting)
+        location = _jsonld_location(posting)
+        description = _html_to_text(posting.get("description", ""))
+        if title or company or location or description:
+            return {"title": title, "company": company, "location": location, "description": description}
+
+    title = ""
+    m = _TITLE_TAG_RE.search(html)
+    if m:
+        title = _html.unescape(_html_to_text(m.group(1))).strip()
+    description = _html_to_text(html)[:8000]
+    return {"title": title, "company": "", "location": "", "description": description}
+
+
+def normalize_manual_posting(url: str, title: str, company: str, location: str, description: str) -> dict:
+    """Build a normalized posting dict from user-confirmed manual entry fields."""
+    return {
+        "id": _make_id("manual", url),
+        "source": "manual",
+        "title": title.strip(),
+        "company": company.strip(),
+        "location": location.strip(),
+        "url": url,
+        "description": description.strip(),
+        "posted_date": "",
+        "fetched_date": _now(),
+    }
 
 
 # --- run_all ---

@@ -10,6 +10,7 @@ Or via CLI:
 
 import difflib
 import json
+import sys
 import threading
 from pathlib import Path
 
@@ -210,6 +211,54 @@ def api_scan():
     sources = list({p["source"] for p in accepted})
     log_activity("scan_run", detail={"fetched": len(postings), "stored": len(accepted), "sources": sources})
     return {"fetched": len(postings), "stored": len(accepted), "new_in_db": len(list_jobs(status="new")), "warnings": warnings}
+
+
+class ManualFetchRequest(BaseModel):
+    url: str
+
+
+@app.post("/api/jobs/manual/fetch")
+def api_manual_fetch(body: ManualFetchRequest):
+    """
+    Best-effort scrape of a user-pasted job URL, for pre-filling the add-job
+    form. Always returns 200 — a fetch failure comes back as a `warning`
+    string with empty fields rather than an error, since the user can still
+    fill the form in by hand either way.
+    """
+    from agents import aggregator
+    try:
+        fields = aggregator.fetch_manual_url(body.url)
+        return {**fields, "warning": None}
+    except Exception as e:
+        msg = str(e)
+        if "403" in msg or "401" in msg:
+            warning = "This site blocks automated fetching. Enter the details manually."
+        else:
+            warning = f"Couldn't fetch this page ({msg}). Enter the details manually."
+        print(f"  Manual fetch failed for {body.url}: {e}", file=sys.stderr)
+        return {"title": "", "company": "", "location": "", "description": "", "warning": warning}
+
+
+class ManualJobRequest(BaseModel):
+    url: str
+    title: str
+    company: str = ""
+    location: str = ""
+    description: str = ""
+
+
+@app.post("/api/jobs/manual")
+def api_manual_add(body: ManualJobRequest):
+    """Add a job the user found outside of the configured sources, by URL."""
+    from agents import aggregator
+    if not body.url.strip() or not body.title.strip():
+        raise HTTPException(status_code=400, detail="URL and title are required.")
+    posting = aggregator.normalize_manual_posting(
+        body.url, body.title, body.company, body.location, body.description
+    )
+    upsert_job(posting)
+    log_activity("manual_job_added", job_id=posting["id"], detail={"url": posting["url"]})
+    return get_job(posting["id"])
 
 
 @app.get("/api/score/estimate")

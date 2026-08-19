@@ -1248,9 +1248,17 @@ function renderDetail(job) {
 
     <div class="detail-grid">
       <div class="panel">
-        <div class="panel-header"><span class="panel-title">Job Description</span></div>
+        <div class="panel-header">
+          <span class="panel-title">Job Description</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="save-indicator" id="description-saved">Saved</span>
+            <button class="btn-ghost" id="btn-description-edit">Edit</button>
+            <button class="btn" id="save-description" style="display:none;">Save</button>
+          </div>
+        </div>
         <div class="panel-body">
-          <div class="prose">${esc(job.description || 'No description available.')}</div>
+          <div class="prose" id="description-view">${esc(job.description || 'No description available. If this job came from an Indeed alert email, paste the full description in before generating a draft.')}</div>
+          <textarea class="draft-edit" id="description-edit" style="display:none;">${esc(job.description || '')}</textarea>
         </div>
       </div>
 
@@ -1476,6 +1484,42 @@ function setupDetailHandlers(job) {
   // iterate on drafts via chat
   setupChatPanel(job, 'resume');
   setupChatPanel(job, 'cover_letter');
+
+  // edit job description
+  const editDescBtn = document.getElementById('btn-description-edit');
+  if (editDescBtn) {
+    editDescBtn.addEventListener('click', () => {
+      const view = document.getElementById('description-view');
+      const edit = document.getElementById('description-edit');
+      const saveBtn = document.getElementById('save-description');
+      const editing = edit.style.display !== 'none';
+      view.style.display = editing ? '' : 'none';
+      edit.style.display = editing ? 'none' : '';
+      saveBtn.style.display = editing ? 'none' : '';
+      editDescBtn.textContent = editing ? 'Edit' : 'Cancel';
+      if (!editing) edit.focus();
+    });
+  }
+
+  const saveDescBtn = document.getElementById('save-description');
+  if (saveDescBtn) {
+    saveDescBtn.addEventListener('click', async () => {
+      const text = document.getElementById('description-edit').value;
+      await api(`/api/jobs/${job.id}/description`, {
+        method: 'POST',
+        body: JSON.stringify({ description: text }),
+      });
+      job.description = text;
+      const ind = document.getElementById('description-saved');
+      ind.style.display = 'inline';
+      setTimeout(() => ind.style.display = 'none', 2000);
+      document.getElementById('description-view').textContent = text || 'No description available. If this job came from an Indeed alert email, paste the full description in before generating a draft.';
+      document.getElementById('description-view').style.display = '';
+      document.getElementById('description-edit').style.display = 'none';
+      saveDescBtn.style.display = 'none';
+      document.getElementById('btn-description-edit').textContent = 'Edit';
+    });
+  }
 }
 
 // --- activity view ---

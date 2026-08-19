@@ -123,6 +123,26 @@ def api_update_draft(job_id: str, body: DraftUpdate):
     return {"ok": True}
 
 
+class DescriptionUpdate(BaseModel):
+    description: str
+
+
+@app.post("/api/jobs/{job_id}/description")
+def api_update_description(job_id: str, body: DescriptionUpdate):
+    """
+    Manually set/replace a job's description. Needed for sources like Indeed
+    email alerts, which rarely carry a full description, so drafting has
+    real posting text to work from.
+    """
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job["description"] = body.description.strip()
+    upsert_job(job)
+    log_activity("description_edited", job_id=job_id, detail={})
+    return get_job(job_id)
+
+
 class ChatMessage(BaseModel):
     message: str
 

@@ -14,21 +14,100 @@ A local system for finding, scoring, and tailoring job applications, then tracki
 
 No part of this system submits applications automatically. That step stays manual by design.
 
-## Setup
+## Getting started
+
+### Prerequisites
+
+- Python 3.11+
+- An [Anthropic API key](https://console.anthropic.com/) — required for scoring, tailoring, and prep generation. Not required just to browse the dashboard or run a scan against a source that's already configured.
+- Optional, only if you want a given posting source: Gmail API credentials (for LinkedIn/Indeed email parsing), Greenhouse/Lever/Ashby/SmartRecruiters board slugs, or a Bundesagentur für Arbeit API key. Every source is opt-in — leave its env vars blank and `scan` simply skips it.
+
+### 1. Clone and install
 
 ```bash
+git clone <this repo>
+cd job-search-agent
 python -m venv venv
-source venv/bin/activate
-pip install -e .
-cp .env.example .env
-# fill in .env with your own credentials
 ```
 
-Fill out `data/profile/profile.json` with your details (target roles, comp floor, location, skills) and paste your base resume into `data/profile/resume.txt` before running a scan.
+Activate the virtualenv:
+
+```bash
+# macOS / Linux
+source venv/bin/activate
+
+# Windows (PowerShell)
+venv\Scripts\Activate.ps1
+```
+
+```bash
+pip install -e .
+```
+
+This installs the `jobsearch` CLI command via the `console_scripts` entry point in `pyproject.toml`. Confirm it worked:
+
+```bash
+jobsearch --help
+```
+
+### 2. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and fill in:
+
+| Variable | Required for | Notes |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | scoring, tailoring, cover letters, prep briefs | from console.anthropic.com |
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | LinkedIn/Indeed email parsing | see below to obtain the refresh token |
+| `GREENHOUSE_BOARDS` / `LEVER_BOARDS` / `ASHBY_BOARDS` / `SMARTRECRUITERS_COMPANIES` | those ATS sources | comma-separated board/company slugs, e.g. `GREENHOUSE_BOARDS=stripe,anthropic,figma` |
+| `ARBEITSAGENTUR_LOCATION` / `ARBEITSAGENTUR_API_KEY` | Bundesagentur für Arbeit source | see `.env.example` for how to grab the API key from DevTools |
+| `MONTHLY_BUDGET_USD` | dashboard budget widget | optional, defaults to 50 |
+
+To get a Gmail refresh token (only needed if you want LinkedIn/Indeed alert emails parsed):
+
+1. In Google Cloud Console, create a project and enable the Gmail API.
+2. Create an OAuth 2.0 client ID of type "Desktop app" and copy its client ID/secret into `.env`.
+3. Run `python get_gmail_token.py` — it opens a browser for you to sign in, then prints the refresh token to paste into `.env`.
+
+### 3. Set up your profile
+
+`data/profile/profile.json` and `data/profile/resume.txt` hold your personal details and base resume. Both are gitignored, since they're private — nothing you put there ever gets committed. Create them from the checked-in templates:
+
+```bash
+cp data/profile/profile.example.json data/profile/profile.json
+cp data/profile/resume.example.txt data/profile/resume.txt
+```
+
+Edit `profile.json` with your own details — target titles, years of experience, comp floor, location preferences, companies/keywords to exclude, and must-have title keywords. This is what every posting gets scored against, so the more specific, the better the fit scores will be. See `ARCHITECTURE.md` for the full field reference.
+
+Fill in `resume.txt` with your own base resume as plain text, following the section structure in the example. The resume tailor agent only ever re-emphasizes and re-orders content from this file, so it needs to already contain everything you want it to be able to draw from.
+
+### 4. Run it
+
+```bash
+jobsearch scan             # pull fresh postings from every configured source
+jobsearch score            # score new postings against your profile (calls Claude)
+jobsearch list --status scored
+jobsearch draft <job_id>   # generate a tailored resume + cover letter
+jobsearch track <job_id> submitted
+jobsearch prep <job_id>    # once a job is marked interviewing
+jobsearch serve            # dashboard at http://localhost:8000
+```
+
+Or skip the CLI entirely and drive the whole pipeline from `jobsearch serve` — the dashboard's Pipeline view has buttons for scan, score, and per-job draft/prep generation.
+
+### 5. Run the tests
+
+```bash
+pytest
+```
 
 ## Project layout
 
-See `CLAUDE.md` for the full architecture writeup.
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full system overview, data flow, module reference, and API/CLI documentation. `CLAUDE.md` covers the project's goals and conventions.
 
 ## Roadmap
 

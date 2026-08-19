@@ -1,0 +1,37 @@
+{
+  "name": "Jane Doe",
+  "current_title": "Senior Software Engineer",
+  "target_titles": [
+    "Engineering Manager",
+    "Senior Engineering Manager"
+  ],
+  "years_experience": 10,
+  "core_skills": ["Python", "Distributed systems", "Team leadership"],
+  "domains": [
+    "API platforms",
+    "Enterprise SaaS"
+  ],
+  "comp_floor_usd": 200000,
+  "locations": {
+    "remote_ok": true,
+    "city_allowlist_international": ["Toronto", "London"],
+    "preferred_regions_us": [
+      "San Francisco Bay Area",
+      "New York",
+      "Seattle"
+    ],
+    "willing_to_relocate": false
+  },
+  "resume_path": "data/profile/resume.txt",
+  "exclude_companies": ["Company A", "Company B"],
+  "exclude_title_keywords": ["account manager", "account executive"],
+  "must_have_keywords": [],
+  "must_have_title_keywords": [
+    "engineering manager", "software engineering manager",
+    "director of engineering", "engineering director"
+  ],
+  "nice_to_have_keywords": [],
+  "require_english_workplace": true,
+  "require_visa_sponsorship_for_international_roles": false,
+  "notes": ""
+}

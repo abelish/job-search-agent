@@ -1,0 +1,32 @@
+Jane Doe
+jane.doe@example.com | (555) 123-4567 | San Francisco, CA
+
+
+
+EXECUTIVE SUMMARY
+
+Two or three sentences summarizing your experience, the kind of role you're
+targeting, and what you're known for. The resume tailor agent rewrites this
+per posting, so keep it accurate and complete here rather than terse.
+
+
+PROFESSIONAL EXPERIENCE
+
+COMPANY NAME – City, ST                                              2021 – Present
+Job Title | Team or Org (if useful context)
+One or two sentences of scope: team size, budget, systems owned.
+- Bullet describing an accomplishment, with a measurable result where possible.
+- Another bullet. The tailor agent reorders and re-emphasizes these bullets per
+  posting, so include everything you'd want it to be able to draw from, not just
+  what's most relevant to any one job.
+
+PREVIOUS COMPANY – City, ST                                          2018 – 2021
+Job Title
+- Bullet.
+- Bullet.
+
+
+SKILLS & COMPETENCIES
+
+Category: Item, item, item
+Category: Item, item, item

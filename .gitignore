@@ -5,6 +5,8 @@ __pycache__/
 data/jobs/*.json
 data/jobs/*.db
 tracker/*.db
+data/profile/profile.json
+data/profile/resume.txt
 .DS_Store
 *.egg-info/
 dist/

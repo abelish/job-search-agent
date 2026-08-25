@@ -694,3 +694,23 @@ def test_normalize_manual_posting_stable_id_for_same_url():
     a = normalize_manual_posting("https://example.com/job/1", "Title A", "", "", "")
     b = normalize_manual_posting("https://example.com/job/1", "Title B", "Different Co", "", "")
     assert a["id"] == b["id"]
+
+
+def test_normalize_manual_posting_url_is_optional():
+    result = normalize_manual_posting(
+        "", "  VP Engineering  ", " Some Co ", " Remote ", " Sent over by a recruiter. "
+    )
+    assert result["url"] == ""
+    assert result["title"] == "VP Engineering"
+    assert len(result["id"]) == 12
+
+
+def test_normalize_manual_posting_without_url_gets_distinct_ids():
+    a = normalize_manual_posting("", "Same Title", "Same Co", "", "Same description")
+    b = normalize_manual_posting("", "Same Title", "Same Co", "", "Same description")
+    assert a["id"] != b["id"]
+
+
+def test_normalize_manual_posting_none_url_treated_as_empty():
+    result = normalize_manual_posting(None, "Title", "", "", "")
+    assert result["url"] == ""

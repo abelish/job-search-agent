@@ -8,6 +8,7 @@ from unittest.mock import patch, call
 
 from agents.scorer import (
     passes_hard_filters,
+    hard_filter_reason,
     _fmt_profile,
     _extract_json,
     _is_director_plus,
@@ -497,13 +498,13 @@ def test_score_all_returns_tuple():
         with patch("agents.scorer.log_activity"):
             result = score_all([POSTING], PROFILE, threshold=70)
     assert isinstance(result, tuple)
-    assert len(result) == 2
+    assert len(result) == 3
 
 
 def test_score_all_strips_token_fields_from_output():
     with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
         with patch("agents.scorer.log_activity"):
-            above, below = score_all([POSTING], PROFILE, threshold=70)
+            above, below, filtered = score_all([POSTING], PROFILE, threshold=70)
     assert "_input_tokens" not in above[0]
     assert "_output_tokens" not in above[0]
     assert "_model" not in above[0]
@@ -512,7 +513,7 @@ def test_score_all_strips_token_fields_from_output():
 def test_score_all_returns_above_threshold():
     with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
         with patch("agents.scorer.log_activity"):
-            above, below = score_all([POSTING], PROFILE, threshold=70)
+            above, below, filtered = score_all([POSTING], PROFILE, threshold=70)
     assert len(above) == 1
     assert above[0]["fit_score"] == 85
     assert len(below) == 0
@@ -522,7 +523,7 @@ def test_score_all_below_threshold_goes_to_below_list():
     low_response = {**CLAUDE_RESPONSE, "text": '{"score": 40, "rationale": "Poor fit"}'}
     with patch("agents.scorer.complete", return_value=low_response):
         with patch("agents.scorer.log_activity"):
-            above, below = score_all([POSTING], PROFILE, threshold=70)
+            above, below, filtered = score_all([POSTING], PROFILE, threshold=70)
     assert above == []
     assert len(below) == 1
     assert below[0]["fit_score"] == 40
@@ -533,18 +534,22 @@ def test_score_all_below_threshold_keeps_real_rationale():
     low_response = {**CLAUDE_RESPONSE, "text": '{"score": 55, "rationale": "Missing cloud experience"}'}
     with patch("agents.scorer.complete", return_value=low_response):
         with patch("agents.scorer.log_activity"):
-            above, below = score_all([POSTING], PROFILE, threshold=70)
+            above, below, filtered = score_all([POSTING], PROFILE, threshold=70)
     assert below[0]["fit_rationale"] == "Missing cloud experience"
 
 
-def test_score_all_skips_hard_filter_failures():
+def test_score_all_hard_filter_failures_go_to_filtered_list():
     excluded_posting = {**POSTING, "company": "BadCorp"}
     with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE) as mock_claude:
         with patch("agents.scorer.log_activity"):
-            above, below = score_all([excluded_posting], PROFILE)
+            above, below, filtered = score_all([excluded_posting], PROFILE)
     mock_claude.assert_not_called()
     assert above == []
     assert below == []
+    assert len(filtered) == 1
+    assert filtered[0]["fit_score"] is None
+    assert "BadCorp" in filtered[0]["fit_rationale"]
+    assert filtered[0]["fit_rationale"].startswith("Filtered out:")
 
 
 def test_score_all_sorts_by_score_descending():
@@ -558,7 +563,7 @@ def test_score_all_sorts_by_score_descending():
     ]
     with patch("agents.scorer.complete", side_effect=responses):
         with patch("agents.scorer.log_activity"):
-            above, below = score_all(postings, PROFILE, threshold=70)
+            above, below, filtered = score_all(postings, PROFILE, threshold=70)
     assert above[0]["fit_score"] == 90
     assert above[1]["fit_score"] == 75
 
@@ -599,6 +604,6 @@ def test_score_all_should_stop_halts_loop():
 
     with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
         with patch("agents.scorer.log_activity"):
-            above, below = score_all(postings, PROFILE, should_stop=_should_stop)
+            above, below, filtered = score_all(postings, PROFILE, should_stop=_should_stop)
     # Only 1 job should have been scored before stop
     assert len(above) + len(below) == 1

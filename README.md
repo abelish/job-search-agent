@@ -4,8 +4,8 @@ A local system for finding, scoring, and tailoring job applications, then tracki
 
 ## How this works
 
-1. **Scan** — pulls fresh postings from Greenhouse, Lever, Ashby, SmartRecruiters, Bundesagentur, and parsed Gmail job alerts (LinkedIn, Indeed). Only postings that pass your hard filters (title keywords, excluded companies, location) are stored. Run via `jobsearch scan` or the Scan button in the dashboard. Found something outside those sources? Use **Add job by URL** in the dashboard to pull in a single posting by pasting its link — it auto-fills what it can from the page, and you can fill in or correct the rest before saving. Manually added jobs skip the hard filters and flow into the same Score → Draft → Track pipeline as scanned ones.
-2. **Score** — Claude rates each new posting against your profile (0–100) with a rationale. Postings above the threshold (default 70) surface in your review queue; below-threshold postings are still visible in the dashboard with their real score so you can see why they didn't make the cut. Scoring runs in the background with a live progress bar and a Stop button that preserves already-scored results. Run via `jobsearch score [--limit N]` or the Score button in the dashboard.
+1. **Scan** — pulls fresh postings from Greenhouse, Lever, Ashby, SmartRecruiters, Bundesagentur, and parsed Gmail job alerts (LinkedIn, Indeed). Only postings that pass your hard filters (title keywords, excluded companies, location) are stored. Run via `jobsearch scan` or the Scan button in the dashboard. Found something outside those sources? Use **Add job manually** in the dashboard to pull in a single posting — paste its URL and it auto-fills what it can from the page, or leave the URL blank and type in the details by hand for postings with no URL (e.g. one relayed through a recruiter email). Manually added jobs skip the hard filters at add time and flow into the same Score → Draft → Track pipeline as scanned ones.
+2. **Score** — Claude rates each new posting against your profile (0–100) with a rationale. Postings above the threshold (default 70) surface in your review queue; below-threshold postings are still visible in the dashboard with their real score so you can see why they didn't make the cut. Postings that fail a hard filter at this stage (including manually added ones) never reach Claude — they land under the Filtered tab with the reason why, and can be moved back to New. Scoring runs in the background with a live progress bar and a Stop button that preserves already-scored results. Run via `jobsearch score [--limit N]` or the Score button in the dashboard.
 3. **Dismiss or draft** — from a scored job's detail view, either dismiss it (removes it from the queue, keeps it findable under the Dismissed filter) or generate a tailored resume and cover letter via the Draft button.
 4. **Review and submit manually** — open the draft in the dashboard, edit as needed, then submit on the company's career page. The system never submits on your behalf.
 5. **Track status** — update the job status (submitted → interviewing → offer/rejected) via the dropdown in the dashboard or `jobsearch track <job_id> <status>`.
@@ -119,6 +119,6 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full system overview, data flow
 - [x] SQLite tracker schema and CLI commands
 - [x] Interview prep agent
 - [x] Web dashboard
-- [x] Manual job entry by URL
+- [x] Manual job entry, by URL or by hand
 - [x] Packaged as installable CLI tool
 - [x] Tests

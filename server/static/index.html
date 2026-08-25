@@ -87,6 +87,7 @@
     text-transform: uppercase; letter-spacing: .05em;
   }
   .badge-new        { background: #1e2a3a; color: var(--blue); }
+  .badge-filtered   { background: #1e1e1e; color: var(--red); }
   .badge-dismissed  { background: #1e1e1e; color: var(--muted); }
   .badge-scored     { background: #2a2a1a; color: var(--yellow); }
   .badge-drafted    { background: #1a2a2a; color: var(--green); }
@@ -361,7 +362,7 @@
   #modal-cost .cost-note { font-size: 11px; color: var(--muted); margin-top: 4px; }
   #modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
 
-  /* Add job by URL modal */
+  /* Add job manually modal */
   #add-job-modal {
     display: none; position: fixed; inset: 0; z-index: 200;
     background: rgba(0,0,0,.6); align-items: center; justify-content: center;
@@ -423,7 +424,7 @@
       <div class="pipeline-actions">
         <button class="btn-ghost" id="btn-scan">Scan for new jobs</button>
         <span class="action-hint" id="last-scan-hint"></span>
-        <button class="btn-ghost" id="btn-add-job">Add job by URL</button>
+        <button class="btn-ghost" id="btn-add-job">Add job manually</button>
         <button class="btn" id="btn-score" disabled>Score new jobs</button>
         <span class="action-hint" id="score-hint"></span>
         <div class="score-progress" id="score-progress">
@@ -459,6 +460,7 @@
       <div class="filters" id="status-filters">
         <button class="filter-btn active" data-status="">All</button>
         <button class="filter-btn" data-status="new">New</button>
+        <button class="filter-btn" data-status="filtered">Filtered</button>
         <button class="filter-btn" data-status="dismissed">Dismissed</button>
         <button class="filter-btn" data-status="scored">Scored</button>
         <button class="filter-btn" data-status="drafted">Drafted</button>
@@ -502,14 +504,14 @@
   </div>
 </div>
 
-<!-- Add job by URL modal -->
+<!-- Add job manually modal -->
 <div id="add-job-modal">
   <div id="add-job-box">
-    <div id="add-job-title">Add job by URL</div>
+    <div id="add-job-title">Add job manually</div>
     <div class="field">
-      <label class="field-label" for="aj-url">Job posting URL</label>
+      <label class="field-label" for="aj-url">Job posting URL (optional)</label>
       <div class="field-row">
-        <input class="field-input" id="aj-url" type="url" placeholder="https://...">
+        <input class="field-input" id="aj-url" type="url" placeholder="https://... — leave blank if you got this from an email or elsewhere">
         <button class="btn-ghost" id="aj-fetch" style="white-space:nowrap;">Fetch details</button>
       </div>
     </div>
@@ -546,7 +548,7 @@
 <div id="toast"></div>
 
 <script>
-const STATUS_ORDER = ['new','dismissed','scored','drafted','submitted','interviewing','rejected','offer'];
+const STATUS_ORDER = ['new','filtered','dismissed','scored','drafted','submitted','interviewing','rejected','offer'];
 
 // Prices per million tokens matching tracker/_PRICING
 const TOKEN_PRICES = {
@@ -813,7 +815,7 @@ document.getElementById('btn-scan').addEventListener('click', async () => {
   }
 });
 
-// --- add job by URL ---
+// --- add job manually ---
 function openAddJobModal() {
   ['aj-url', 'aj-title', 'aj-company', 'aj-location', 'aj-description'].forEach(id => {
     document.getElementById(id).value = '';
@@ -868,8 +870,8 @@ document.getElementById('aj-submit').addEventListener('click', async () => {
   const url = document.getElementById('aj-url').value.trim();
   const title = document.getElementById('aj-title').value.trim();
   const warningEl = document.getElementById('aj-fetch-warning');
-  if (!url || !title) {
-    warningEl.textContent = 'URL and title are required.';
+  if (!title) {
+    warningEl.textContent = 'Title is required.';
     warningEl.style.display = '';
     return;
   }
@@ -1177,9 +1179,11 @@ document.getElementById('detail-back').addEventListener('click', () => {
 function renderDetail(job) {
   const scoreBlock = job.fit_rationale ? `
     <div class="score-block">
-      ${job.fit_score > 0
-        ? `<div class="score-num ${job.fit_score >= 75 ? 'hi' : job.fit_score >= 50 ? 'mid' : 'lo'} score">${job.fit_score} / 100</div>`
-        : `<div class="score-num lo score">Below threshold</div>`}
+      ${job.status === 'filtered'
+        ? `<div class="score-num lo score">Not scored</div>`
+        : job.fit_score > 0
+          ? `<div class="score-num ${job.fit_score >= 75 ? 'hi' : job.fit_score >= 50 ? 'mid' : 'lo'} score">${job.fit_score} / 100</div>`
+          : `<div class="score-num lo score">Below threshold</div>`}
       <div class="score-rationale">${esc(job.fit_rationale || '')}</div>
     </div>` : '';
 
@@ -1193,6 +1197,12 @@ function renderDetail(job) {
     <div class="action-bar">
       <span class="action-bar-label">This job hasn't been scored yet. Dismiss it to skip Claude scoring and save on cost.</span>
       <button class="btn-danger" id="btn-dismiss-detail">Dismiss</button>
+    </div>`;
+  } else if (job.status === 'filtered') {
+    actionBar = `
+    <div class="action-bar">
+      <span class="action-bar-label">This job never reached Claude — it was rejected by one of your hard filters before scoring (see reason above). If that's wrong, adjust the filter in your profile or move it back to New to include it in the next scoring run.</span>
+      <button class="btn" id="btn-restore-detail">Move back to New</button>
     </div>`;
   } else if (job.status === 'dismissed') {
     actionBar = `
@@ -1567,7 +1577,7 @@ function activityLabel(item) {
     case 'scan_run':
       return `Scan complete: <strong>${d.stored || d.count || 0}</strong> matches stored (${d.fetched || d.count || 0} fetched)`;
     case 'manual_job_added':
-      return `<strong>${esc(item.job_id)}</strong> added manually via URL`;
+      return `<strong>${esc(item.job_id)}</strong> added manually${d.url ? '' : ' (no URL)'}`;
     case 'score_run':
       return `Scored <strong>${d.total_postings || 0}</strong> postings: <strong>${d.above_threshold || 0}</strong> above threshold (${d.threshold || 70})`;
     case 'prep_generated':

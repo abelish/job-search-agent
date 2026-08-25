@@ -6,12 +6,16 @@ Pulls job postings from:
 - Lever job board API (public, per company)
 - Ashby job board API (public, per company)
 - Gmail job alert emails (LinkedIn, Indeed) via Gmail API, read-only scope
-- Manual entry: a single URL pasted by the user, best-effort scraped
+- Manual entry: a posting added by hand, either from a pasted URL (best-effort
+  scraped) or typed/pasted in directly for postings with no URL (e.g. relayed
+  through a recruiter email)
 
 Normalizes everything into one schema:
 
 {
-    "id": str,            # stable sha1 of source + url (12 hex chars)
+    "id": str,            # stable sha1 of source + url (12 hex chars) when a
+                           # url is given; otherwise a random 12 hex chars,
+                           # since there's no stable key to dedupe against
     "source": str,        # "greenhouse" | "lever" | "ashby" | "linkedin_email" | "indeed_email" | "manual"
     "title": str,
     "company": str,
@@ -38,6 +42,7 @@ import json
 import os
 import re
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -788,9 +793,18 @@ def fetch_manual_url(url: str) -> dict:
 
 
 def normalize_manual_posting(url: str, title: str, company: str, location: str, description: str) -> dict:
-    """Build a normalized posting dict from user-confirmed manual entry fields."""
+    """
+    Build a normalized posting dict from user-confirmed manual entry fields.
+    URL is optional — a posting relayed through a recruiter email or similar
+    has no canonical URL to attach. When one is given, the id is a stable
+    hash of it (so re-adding the same URL updates the existing row instead of
+    duplicating it); when it's omitted, the id is random, since there's
+    nothing stable to key on.
+    """
+    url = (url or "").strip()
+    job_id = _make_id("manual", url) if url else uuid.uuid4().hex[:12]
     return {
-        "id": _make_id("manual", url),
+        "id": job_id,
         "source": "manual",
         "title": title.strip(),
         "company": company.strip(),

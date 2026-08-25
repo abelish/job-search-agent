@@ -260,19 +260,23 @@ def api_manual_fetch(body: ManualFetchRequest):
 
 
 class ManualJobRequest(BaseModel):
-    url: str
     title: str
     company: str = ""
     location: str = ""
     description: str = ""
+    url: str = ""
 
 
 @app.post("/api/jobs/manual")
 def api_manual_add(body: ManualJobRequest):
-    """Add a job the user found outside of the configured sources, by URL."""
+    """
+    Add a job the user found outside of the configured sources — with a URL
+    when there is one, or by hand when there isn't (e.g. a posting relayed
+    through a recruiter email).
+    """
     from agents import aggregator
-    if not body.url.strip() or not body.title.strip():
-        raise HTTPException(status_code=400, detail="URL and title are required.")
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="Title is required.")
     posting = aggregator.normalize_manual_posting(
         body.url, body.title, body.company, body.location, body.description
     )
@@ -334,13 +338,16 @@ def api_score():
                 return _score_state.get("stop_requested", False)
 
         try:
-            above, below = scorer.score_all(new_jobs, profile, on_progress=_on_progress, should_stop=_should_stop)
+            above, below, filtered = scorer.score_all(new_jobs, profile, on_progress=_on_progress, should_stop=_should_stop)
             for job in above:
                 upsert_job(job)
                 update_status(job["id"], "scored")
             for job in below:
                 upsert_job(job)
                 update_status(job["id"], "scored")
+            for job in filtered:
+                upsert_job(job)
+                update_status(job["id"], "filtered")
         finally:
             with _score_lock:
                 _score_state["running"] = False

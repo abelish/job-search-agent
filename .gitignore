@@ -11,3 +11,4 @@ data/profile/resume.txt
 *.egg-info/
 dist/
 build/
+gitleaks.exe

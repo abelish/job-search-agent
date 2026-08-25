@@ -19,7 +19,7 @@ posted_date   TEXT
 fetched_date  TEXT
 fit_score     INTEGER
 fit_rationale TEXT
-status        TEXT    -- new | scored | drafted | submitted | interviewing | rejected | offer
+status        TEXT    -- new | filtered | dismissed | scored | drafted | submitted | interviewing | rejected | offer
 resume_draft  TEXT
 cover_letter_draft TEXT
 resume_chat   TEXT    -- JSON array of {role, content, created_at} chat turns iterating the resume draft
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS activity_log (
 );
 """
 
-VALID_STATUSES = {"new", "dismissed", "scored", "drafted", "submitted", "interviewing", "rejected", "offer"}
+VALID_STATUSES = {"new", "filtered", "dismissed", "scored", "drafted", "submitted", "interviewing", "rejected", "offer"}
 
 # Draft sections that support iterative chat-based revision, and the DB columns backing them.
 CHAT_SECTIONS = {
@@ -339,7 +339,7 @@ def get_stats() -> dict:
     ).fetchall()
     conn.close()
     counts = {r[0]: r[1] for r in rows}
-    return {s: counts.get(s, 0) for s in ["new", "dismissed", "scored", "drafted", "submitted", "interviewing", "rejected", "offer"]}
+    return {s: counts.get(s, 0) for s in ["new", "filtered", "dismissed", "scored", "drafted", "submitted", "interviewing", "rejected", "offer"]}
 
 
 def get_token_summary() -> dict:

@@ -73,14 +73,17 @@ def score(limit):
     if limit:
         new_jobs = new_jobs[:limit]
         click.echo(f"Limiting to {limit} postings.")
-    above, below = scorer.score_all(new_jobs, profile)
+    above, below, filtered = scorer.score_all(new_jobs, profile)
     for job in above:
         upsert_job(job)
         update_status(job["id"], "scored")
     for job in below:
         upsert_job(job)
         update_status(job["id"], "scored")
-    click.echo(f"Scored {len(new_jobs)} postings: {len(above)} above threshold, {len(below)} below.")
+    for job in filtered:
+        upsert_job(job)
+        update_status(job["id"], "filtered")
+    click.echo(f"Scored {len(new_jobs)} postings: {len(above)} above threshold, {len(below)} below, {len(filtered)} filtered out before scoring.")
 
 
 @cli.command(name="list")

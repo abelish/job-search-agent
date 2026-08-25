@@ -80,10 +80,11 @@ def _is_director_plus(title: str) -> bool:
     return any(term in t for term in _DIRECTOR_PLUS_TERMS)
 
 
-def passes_hard_filters(posting: dict, profile: dict) -> bool:
+def hard_filter_reason(posting: dict, profile: dict) -> str | None:
     """
     Deterministic pre-filter against hard profile constraints.
-    Returns False on any hard fail; saves Claude calls for clear misses.
+    Returns a human-readable reason on the first hard fail, or None if the
+    posting passes. Saves Claude calls for clear misses.
 
     Checks:
     - exclude_companies (case-insensitive company name match)
@@ -97,18 +98,19 @@ def passes_hard_filters(posting: dict, profile: dict) -> bool:
     company = posting.get("company", "").lower()
     excluded = {c.lower() for c in profile.get("exclude_companies", [])}
     if company and company in excluded:
-        return False
+        return f"Company \"{posting.get('company', '')}\" is on your excluded companies list."
 
     title_lower = posting.get("title", "").lower()
     for kw in profile.get("exclude_title_keywords", []):
         if kw.lower() in title_lower:
-            return False
+            return f"Title contains the excluded keyword \"{kw}\"."
 
     must_have = profile.get("must_have_keywords", [])
     if must_have:
         searchable = (posting.get("title", "") + " " + posting.get("description", "")).lower()
-        if not all(kw.lower() in searchable for kw in must_have):
-            return False
+        missing = [kw for kw in must_have if kw.lower() not in searchable]
+        if missing:
+            return f"Missing required keyword(s): {', '.join(missing)}."
 
     # Title keyword filter: at least ONE must appear in the job title (OR logic).
     # Use this to restrict to specific role levels or functions without touching description.
@@ -116,24 +118,24 @@ def passes_hard_filters(posting: dict, profile: dict) -> bool:
     if must_have_title:
         title = posting.get("title", "").lower()
         if not any(kw.lower() in title for kw in must_have_title):
-            return False
+            return "Title doesn't match any of your required title keywords."
 
     location = posting.get("location", "").lower()
     if location:
         locs = profile.get("locations", {})
         is_remote = "remote" in location
         if is_remote and not locs.get("remote_ok", True):
-            return False
+            return "Posting is remote, but your profile has remote roles turned off."
         if not is_remote and not locs.get("willing_to_relocate", False):
             preferred = [c.lower() for c in locs.get("city_allowlist_international", [])]
             if preferred and not any(c in location for c in preferred):
-                return False
+                return f"Location \"{posting.get('location', '')}\" isn't in your city allowlist, and you're not marked as willing to relocate."
         # German sources always enforce city_allowlist_international regardless of willing_to_relocate,
         # since the user may be open to relocating globally but still only want Berlin in Germany.
         if not is_remote and posting.get("source") in {"arbeitsagentur", "smartrecruiters"}:
             preferred = [c.lower() for c in locs.get("city_allowlist_international", [])]
             if preferred and not any(c in location for c in preferred):
-                return False
+                return f"Location \"{posting.get('location', '')}\" isn't in your city allowlist for German-sourced postings."
 
     # English workplace: reject postings written primarily in German.
     # Uses a word-count heuristic — borderline cases pass through to Claude for scoring.
@@ -145,7 +147,7 @@ def passes_hard_filters(posting: dict, profile: dict) -> bool:
             " und ", " oder ", " mit ", " für ", " bei ", " ist ",
         ]
         if sum(1 for m in german_markers if m in text) >= 4:
-            return False
+            return "Posting appears to be written primarily in German."
         # For German-source postings in English: reject if German language is explicitly required.
         if posting.get("source") in {"arbeitsagentur", "smartrecruiters"}:
             full_text = (posting.get("title", "") + " " + posting.get("description", "")).lower()
@@ -155,9 +157,14 @@ def passes_hard_filters(posting: dict, profile: dict) -> bool:
                 "deutsch erforderlich", "deutschkenntnisse erforderlich", "fließend deutsch",
             ]
             if any(m in full_text for m in german_required_markers):
-                return False
+                return "Posting explicitly requires German language proficiency."
 
-    return True
+    return None
+
+
+def passes_hard_filters(posting: dict, profile: dict) -> bool:
+    """Convenience boolean wrapper around hard_filter_reason."""
+    return hard_filter_reason(posting, profile) is None
 
 
 def _fmt_profile(profile: dict) -> str:
@@ -324,25 +331,30 @@ def reapply_adjustments(jobs: list[dict]) -> list[dict]:
     return updated
 
 
-def score_all(postings: list[dict], profile: dict, threshold: int = 70, on_progress: callable = None, should_stop: callable = None) -> tuple[list[dict], list[dict]]:
+def score_all(postings: list[dict], profile: dict, threshold: int = 70, on_progress: callable = None, should_stop: callable = None) -> tuple[list[dict], list[dict], list[dict]]:
     """
-    Run passes_hard_filters then score_posting on each posting.
-    Returns (above_threshold, below_threshold), each sorted by score descending.
-    Both lists carry the real fit_score and fit_rationale from Claude.
+    Run hard_filter_reason then score_posting on each posting.
+    Returns (above_threshold, below_threshold, filtered), each sorted by score
+    descending (filtered postings have no score, so they keep input order).
+    above/below carry the real fit_score and fit_rationale from Claude.
+    filtered postings never reach Claude — fit_score is None and fit_rationale
+    explains which hard filter rejected them, so the caller can surface why a
+    job was skipped instead of leaving it stuck looking unscored.
     Logs a score_run activity entry with total token usage.
     """
     above: list[dict] = []
     below: list[dict] = []
+    filtered: list[dict] = []
     total_input = 0
     total_output = 0
     model = DEFAULT_MODEL
-    skipped_hard = 0
 
     for posting in postings:
         if should_stop and should_stop():
             break
-        if not passes_hard_filters(posting, profile):
-            skipped_hard += 1
+        reason = hard_filter_reason(posting, profile)
+        if reason is not None:
+            filtered.append({**posting, "fit_score": None, "fit_rationale": f"Filtered out: {reason}"})
             if on_progress:
                 on_progress()
             continue
@@ -362,7 +374,7 @@ def score_all(postings: list[dict], profile: dict, threshold: int = 70, on_progr
 
     log_activity("score_run", detail={
         "total_postings": len(postings),
-        "skipped_hard_filter": skipped_hard,
+        "skipped_hard_filter": len(filtered),
         "above_threshold": len(above),
         "threshold": threshold,
         "input_tokens": total_input,
@@ -370,4 +382,4 @@ def score_all(postings: list[dict], profile: dict, threshold: int = 70, on_progr
         "model": model,
     })
 
-    return above, below
+    return above, below, filtered

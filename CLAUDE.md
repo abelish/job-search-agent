@@ -4,7 +4,7 @@
 
 A local, CLI-driven system that automates the job search pipeline end to end:
 
-1. Pull job postings from Greenhouse, Lever, Ashby, and SmartRecruiters company career APIs, the Bundesagentur für Arbeit job board, parsed LinkedIn and Indeed job alert emails (via Gmail), or add a single posting manually by URL for jobs found elsewhere.
+1. Pull job postings from Greenhouse, Lever, Ashby, and SmartRecruiters company career APIs, the Bundesagentur für Arbeit job board, parsed LinkedIn and Indeed job alert emails (via Gmail), or add a single posting manually for jobs found elsewhere — by URL, or typed in by hand for postings with no URL (e.g. relayed through a recruiter email).
 2. Score each posting against a stored profile for fit (skills, seniority, comp floor, location).
 3. Draft a tailored resume and cover letter for postings that pass the fit threshold.
 4. Track every application through a SQLite database (drafted, submitted, interviewing, rejected, offer).

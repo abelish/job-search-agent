@@ -44,32 +44,32 @@ Score meaning:
 50-69   Partial match. Significant stretch in at least one dimension.
 0-49    Poor fit. Missing critical requirements or hard constraints violated.
 
-Location note: The candidate strongly prefers to stay local in the San Francisco Bay Area.
-Score on-site or hybrid Bay Area roles 5 to 10 points higher than equivalent roles elsewhere,
-all else being equal.
-
 Compensation note: Before concluding that compensation is unlisted, read the full job description
 carefully for any mention of salary range, base pay, total compensation, equity, OTE, or annual
 pay. Compensation figures often appear at the end of the description after the requirements
 section. If a range or figure is present anywhere in the description, cite it in your rationale
 and factor it against the candidate's stated minimum compensation.
 
-Bay Area compensation benchmarks are significantly higher than most other markets. For roles that
-are manager-level (Engineering Manager, Senior Engineering Manager) rather than director-level or
-above (Director, VP, Head of, CTO), and located outside the Bay Area, score 10 to 15 points lower
-than you otherwise would. These roles rarely offer the compensation range the candidate requires
-without a relocation premium that most companies will not provide.
+Industry and mission fit note: If the candidate profile above names industries to favor or avoid,
+judge the posting's company against them using the job description and your general knowledge of
+the company, not keyword matching. A company whose core, primary business falls in an avoided
+industry should score no higher than 35 even if it otherwise matches well, unless the specific
+role is clearly walled off from that core business (e.g. a renewable energy team inside an
+otherwise diversified company). Don't penalize a company for an incidental client, contract, or
+subsidiary in an avoided industry when its core business is elsewhere. A company whose core
+business falls in a favored industry should score 10 to 15 points higher than an otherwise
+identical role at a neutral company. If the profile names no industries either way, ignore this
+note entirely.
 """
 
-_BAY_AREA_TERMS = {
-    "san francisco", "bay area", "sf, ca", "san jose", "oakland", "berkeley",
-    "silicon valley", "south bay", "east bay", "palo alto", "mountain view",
-    "santa clara", "sunnyvale", "cupertino", "redwood city", "san mateo",
-    "menlo park", "fremont", "hayward", "pleasanton", "walnut creek",
-}
+# Any location bias (e.g. "boost roles near me") is applied as a deterministic,
+# profile-configured adjustment after Claude scores — see _location_adjustment_config
+# and score_posting — rather than baked into the prompt above, so it's visible and
+# tunable per candidate instead of hidden in the prompt template.
 
-# Titles at director level or above — roles below this threshold carry lower
-# comp ranges outside the Bay Area and get a penalty score adjustment.
+# Titles at director level or above — roles below this threshold are the ones
+# eligible for the profile's non_priority_manager_penalty, since manager-level
+# comp ranges vary with location much more than director+ ranges do.
 _DIRECTOR_PLUS_TERMS = {
     "director", "vp", "vice president", "head of", "cto", "chief",
 }
@@ -78,6 +78,32 @@ _DIRECTOR_PLUS_TERMS = {
 def _is_director_plus(title: str) -> bool:
     t = title.lower()
     return any(term in t for term in _DIRECTOR_PLUS_TERMS)
+
+
+def _location_adjustment_config(profile: dict) -> tuple[list[str], int, int]:
+    """
+    Read the optional, opt-in location scoring adjustment from profile.json:
+
+        "locations": {
+            "priority_location_terms": ["San Francisco", "Bay Area", ...],
+            "priority_location_boost": 8,
+            "non_priority_manager_penalty": 10
+        }
+
+    priority_location_terms is a list of case-insensitive substrings matched
+    against the posting's location. A match adds priority_location_boost
+    points. No match, on a role below director level, subtracts
+    non_priority_manager_penalty points (director+ roles are assumed to clear
+    the comp floor regardless of location, so they're exempt).
+
+    All three default to off (empty terms / 0 points) so a profile that
+    doesn't configure this gets no location-based scoring bias at all.
+    """
+    locs = profile.get("locations", {})
+    terms = [t.lower() for t in locs.get("priority_location_terms", [])]
+    boost = locs.get("priority_location_boost", 0)
+    penalty = locs.get("non_priority_manager_penalty", 0)
+    return terms, boost, penalty
 
 
 def hard_filter_reason(posting: dict, profile: dict) -> str | None:
@@ -198,6 +224,11 @@ def _fmt_profile(profile: dict) -> str:
             lines.append("Location: " + "; ".join(parts))
     if profile.get("must_have_title_keywords"):
         lines.append(f"Role type filter (title must include one of): {', '.join(profile['must_have_title_keywords'])}")
+    industry_prefs = profile.get("industry_preferences", {})
+    if industry_prefs.get("favor"):
+        lines.append(f"Favor companies whose core business relates to: {', '.join(industry_prefs['favor'])}")
+    if industry_prefs.get("avoid"):
+        lines.append(f"Avoid companies whose core business relates to: {', '.join(industry_prefs['avoid'])}")
     if profile.get("exclude_companies"):
         lines.append(f"Not interested in: {', '.join(profile['exclude_companies'])}")
     if profile.get("exclude_title_keywords"):
@@ -258,16 +289,7 @@ def score_posting(posting: dict, profile: dict) -> dict:
         score = 0
         rationale = f"Parse error: {raw[:200]}"
 
-    location_lower = posting.get("location", "").lower()
-    is_bay_area = any(term in location_lower for term in _BAY_AREA_TERMS)
-    if is_bay_area:
-        boost = 8
-        score = min(100, score + boost)
-        rationale = rationale + f" (Bay Area location boost: +{boost})"
-    elif not _is_director_plus(posting.get("title", "")):
-        penalty = 10
-        score = max(0, score - penalty)
-        rationale = rationale + f" (Non-Bay-Area manager-level penalty: -{penalty})"
+    score, rationale = _apply_location_adjustment(score, rationale, posting, profile)
 
     return {
         **posting,
@@ -279,11 +301,37 @@ def score_posting(posting: dict, profile: dict) -> dict:
     }
 
 
+def _apply_location_adjustment(score: int, rationale: str, posting: dict, profile: dict) -> tuple[int, str]:
+    """Apply the profile's configured location boost/penalty (see _location_adjustment_config)."""
+    terms, boost, penalty = _location_adjustment_config(profile)
+    if not terms:
+        return score, rationale
+
+    location_lower = posting.get("location", "").lower()
+    is_priority_location = any(term in location_lower for term in terms)
+
+    if is_priority_location and boost:
+        score = min(100, score + boost)
+        rationale = rationale + f" (Priority location boost: +{boost})"
+    elif not is_priority_location and penalty and not _is_director_plus(posting.get("title", "")):
+        score = max(0, score - penalty)
+        rationale = rationale + f" (Non-priority manager-level penalty: -{penalty})"
+
+    return score, rationale
+
+
 def _strip_adjustment(score: int, rationale: str) -> tuple[int, str]:
     """
     Reverse any previously applied score adjustment suffix, returning
     (raw_claude_score, clean_rationale) so adjustments can be re-applied fresh.
     """
+    m = re.search(r' \(Priority location boost: \+(\d+)\)$', rationale)
+    if m:
+        return score - int(m.group(1)), rationale[:m.start()]
+    m = re.search(r' \(Non-priority manager-level penalty: -(\d+)\)$', rationale)
+    if m:
+        return score + int(m.group(1)), rationale[:m.start()]
+    # Legacy suffixes from before the location adjustment became profile-configurable.
     m = re.search(r' \(Bay Area location boost: \+(\d+)\)$', rationale)
     if m:
         return score - int(m.group(1)), rationale[:m.start()]
@@ -293,11 +341,11 @@ def _strip_adjustment(score: int, rationale: str) -> tuple[int, str]:
     return score, rationale
 
 
-def reapply_adjustments(jobs: list[dict]) -> list[dict]:
+def reapply_adjustments(jobs: list[dict], profile: dict) -> list[dict]:
     """
-    Re-apply location/seniority adjustments to already-scored jobs without
+    Re-apply the location/seniority adjustment to already-scored jobs without
     calling Claude. Strips any existing adjustment suffix, recovers the raw
-    Claude score, then applies current boost/penalty logic.
+    Claude score, then applies the profile's current boost/penalty config.
 
     Returns only jobs whose score or rationale actually changed.
     """
@@ -309,21 +357,7 @@ def reapply_adjustments(jobs: list[dict]) -> list[dict]:
             continue
 
         raw_score, clean_rationale = _strip_adjustment(score, rationale)
-
-        location_lower = job.get("location", "").lower()
-        is_bay_area = any(term in location_lower for term in _BAY_AREA_TERMS)
-
-        if is_bay_area:
-            boost = 8
-            new_score = min(100, raw_score + boost)
-            new_rationale = clean_rationale + f" (Bay Area location boost: +{boost})"
-        elif not _is_director_plus(job.get("title", "")):
-            penalty = 10
-            new_score = max(0, raw_score - penalty)
-            new_rationale = clean_rationale + f" (Non-Bay-Area manager-level penalty: -{penalty})"
-        else:
-            new_score = raw_score
-            new_rationale = clean_rationale
+        new_score, new_rationale = _apply_location_adjustment(raw_score, clean_rationale, job, profile)
 
         if new_score != score or new_rationale != rationale:
             updated.append({**job, "fit_score": new_score, "fit_rationale": new_rationale})

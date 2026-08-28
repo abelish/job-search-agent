@@ -20,9 +20,18 @@
       "New York",
       "Seattle"
     ],
-    "willing_to_relocate": false
+    "willing_to_relocate": false,
+    "_comment_priority_location": "Optional. If set, priority_location_terms roles get a fit_score boost, and manager-level (not director+) roles outside them get a penalty, on top of Claude's raw score. Leave all three unset/empty for no location-based scoring adjustment at all.",
+    "priority_location_terms": [],
+    "priority_location_boost": 0,
+    "non_priority_manager_penalty": 0
   },
   "resume_path": "data/profile/resume.txt",
+  "_comment_industry_preferences": "Optional. Claude weighs the posting's company against these when scoring (a company in an avoided industry scores much lower, a company in a favored one scores higher). This is a judgment call Claude makes from the job description, not a keyword filter, since 'industry' isn't structured data. Leave both lists empty for no industry-based scoring influence at all.",
+  "industry_preferences": {
+    "favor": [],
+    "avoid": []
+  },
   "exclude_companies": ["Company A", "Company B"],
   "exclude_title_keywords": ["account manager", "account executive"],
   "must_have_keywords": [],

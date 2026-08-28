@@ -14,6 +14,7 @@ from agents.scorer import (
     _is_director_plus,
     score_posting,
     score_all,
+    reapply_adjustments,
 )
 
 
@@ -42,7 +43,20 @@ PROFILE = {
     "notes": "",
 }
 
-# Non-Bay-Area location so score tests don't pick up the Bay Area boost.
+# PROFILE has no priority_location_terms configured, so it gets no location-based
+# scoring adjustment at all (see test_score_posting_no_location_adjustment_when_not_configured).
+# LOCATION_PROFILE opts into the adjustment, for tests that exercise it directly.
+LOCATION_PROFILE = {
+    **PROFILE,
+    "locations": {
+        **PROFILE["locations"],
+        "priority_location_terms": ["san francisco", "bay area"],
+        "priority_location_boost": 8,
+        "non_priority_manager_penalty": 10,
+    },
+}
+
+# Outside LOCATION_PROFILE's priority terms, so score tests don't pick up its boost.
 POSTING = {
     "id": "abc123def456",
     "source": "greenhouse",
@@ -331,6 +345,28 @@ def test_fmt_profile_exclude_companies():
     assert "WorstCo" in result
 
 
+def test_fmt_profile_industry_favor():
+    profile = {**PROFILE, "industry_preferences": {"favor": ["climate change", "hunger relief"]}}
+    result = _fmt_profile(profile)
+    assert "Favor companies" in result
+    assert "climate change" in result
+    assert "hunger relief" in result
+
+
+def test_fmt_profile_industry_avoid():
+    profile = {**PROFILE, "industry_preferences": {"avoid": ["oil and gas", "defense and weapons"]}}
+    result = _fmt_profile(profile)
+    assert "Avoid companies" in result
+    assert "oil and gas" in result
+    assert "defense and weapons" in result
+
+
+def test_fmt_profile_omits_industry_preferences_when_absent():
+    result = _fmt_profile(PROFILE)
+    assert "Favor companies" not in result
+    assert "Avoid companies" not in result
+
+
 def test_fmt_profile_omits_empty_fields():
     profile = {**PROFILE, "notes": "", "core_skills": []}
     result = _fmt_profile(profile)
@@ -371,19 +407,32 @@ def test_score_posting_parses_valid_response():
     assert "Strong match" in result["fit_rationale"]
 
 
-def test_score_posting_applies_bay_area_boost():
+def test_score_posting_no_location_adjustment_when_not_configured():
+    # PROFILE has no priority_location_terms — no boost/penalty should apply, ever.
+    sf_posting = {**POSTING, "location": "San Francisco, CA"}
+    manager_posting = {**POSTING, "title": "Engineering Manager"}
+    with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
+        sf_result = score_posting(sf_posting, PROFILE)
+        manager_result = score_posting(manager_posting, PROFILE)
+    assert sf_result["fit_score"] == 85
+    assert manager_result["fit_score"] == 85
+    assert "(" not in sf_result["fit_rationale"]
+    assert "(" not in manager_result["fit_rationale"]
+
+
+def test_score_posting_applies_priority_location_boost():
     sf_posting = {**POSTING, "location": "San Francisco, CA"}
     with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
-        result = score_posting(sf_posting, PROFILE)
+        result = score_posting(sf_posting, LOCATION_PROFILE)
     assert result["fit_score"] == 93  # 85 + 8 boost
-    assert "Bay Area location boost" in result["fit_rationale"]
+    assert "Priority location boost" in result["fit_rationale"]
 
 
-def test_score_posting_bay_area_boost_caps_at_100():
+def test_score_posting_priority_location_boost_caps_at_100():
     high_response = {**CLAUDE_RESPONSE, "text": '{"score": 97, "rationale": "Near perfect"}'}
     sf_posting = {**POSTING, "location": "San Francisco, CA"}
     with patch("agents.scorer.complete", return_value=high_response):
-        result = score_posting(sf_posting, PROFILE)
+        result = score_posting(sf_posting, LOCATION_PROFILE)
     assert result["fit_score"] == 100
 
 
@@ -455,38 +504,50 @@ def test_is_director_plus_case_insensitive():
 
 
 # ---------------------------------------------------------------------------
-# score_posting — non-Bay-Area manager-level penalty
+# score_posting — non-priority manager-level penalty (opt-in, profile configured)
 # ---------------------------------------------------------------------------
 
-def test_score_posting_applies_non_bay_area_manager_penalty():
+def test_score_posting_applies_non_priority_manager_penalty():
     manager_posting = {**POSTING, "title": "Engineering Manager"}
     with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
-        result = score_posting(manager_posting, PROFILE)
+        result = score_posting(manager_posting, LOCATION_PROFILE)
     assert result["fit_score"] == 75  # 85 - 10 penalty
-    assert "Non-Bay-Area manager-level penalty" in result["fit_rationale"]
+    assert "Non-priority manager-level penalty" in result["fit_rationale"]
 
 
-def test_score_posting_no_penalty_for_director_outside_bay_area():
+def test_score_posting_no_penalty_for_director_outside_priority_location():
     with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
-        result = score_posting(POSTING, PROFILE)  # VP Engineering in New York — director+, no adjustment
+        result = score_posting(POSTING, LOCATION_PROFILE)  # VP Engineering in New York — director+, no adjustment
     assert result["fit_score"] == 85
 
 
-def test_score_posting_no_penalty_when_bay_area_manager():
+def test_score_posting_no_penalty_when_priority_location_manager():
     manager_sf = {**POSTING, "title": "Engineering Manager", "location": "San Francisco, CA"}
     with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
-        result = score_posting(manager_sf, PROFILE)
-    assert result["fit_score"] == 93  # 85 + 8 Bay Area boost, no penalty
-    assert "Bay Area location boost" in result["fit_rationale"]
+        result = score_posting(manager_sf, LOCATION_PROFILE)
+    assert result["fit_score"] == 93  # 85 + 8 priority location boost, no penalty
+    assert "Priority location boost" in result["fit_rationale"]
     assert "penalty" not in result["fit_rationale"]
 
 
-def test_score_posting_non_bay_area_manager_penalty_floors_at_zero():
+def test_score_posting_non_priority_manager_penalty_floors_at_zero():
     very_low = {**CLAUDE_RESPONSE, "text": '{"score": 5, "rationale": "Very poor fit"}'}
     manager_posting = {**POSTING, "title": "Engineering Manager"}
     with patch("agents.scorer.complete", return_value=very_low):
-        result = score_posting(manager_posting, PROFILE)
+        result = score_posting(manager_posting, LOCATION_PROFILE)
     assert result["fit_score"] == 0  # floor at 0, not negative
+
+
+def test_score_posting_penalty_ignored_when_zero_even_with_terms_set():
+    profile = {**PROFILE, "locations": {**PROFILE["locations"],
+                                         "priority_location_terms": ["san francisco"],
+                                         "priority_location_boost": 8,
+                                         "non_priority_manager_penalty": 0}}
+    manager_posting = {**POSTING, "title": "Engineering Manager"}
+    with patch("agents.scorer.complete", return_value=CLAUDE_RESPONSE):
+        result = score_posting(manager_posting, profile)
+    assert result["fit_score"] == 85
+    assert "(" not in result["fit_rationale"]
 
 
 # ---------------------------------------------------------------------------
@@ -606,4 +667,67 @@ def test_score_all_should_stop_halts_loop():
         with patch("agents.scorer.log_activity"):
             above, below, filtered = score_all(postings, PROFILE, should_stop=_should_stop)
     # Only 1 job should have been scored before stop
+
     assert len(above) + len(below) == 1
+
+
+# ---------------------------------------------------------------------------
+# reapply_adjustments — re-derive location/seniority adjustment without Claude
+# ---------------------------------------------------------------------------
+
+def test_reapply_adjustments_no_change_when_profile_unconfigured():
+    scored = [{**POSTING, "fit_score": 85, "fit_rationale": "Strong match"}]
+    assert reapply_adjustments(scored, PROFILE) == []
+
+
+def test_reapply_adjustments_applies_new_boost_to_already_scored_job():
+    sf_job = {**POSTING, "location": "San Francisco, CA", "fit_score": 85, "fit_rationale": "Strong match"}
+    updated = reapply_adjustments([sf_job], LOCATION_PROFILE)
+    assert len(updated) == 1
+    assert updated[0]["fit_score"] == 93
+    assert "Priority location boost" in updated[0]["fit_rationale"]
+
+
+def test_reapply_adjustments_removes_boost_when_profile_reverts_to_unconfigured():
+    sf_job = {
+        **POSTING,
+        "location": "San Francisco, CA",
+        "fit_score": 93,
+        "fit_rationale": "Strong match (Priority location boost: +8)",
+    }
+    updated = reapply_adjustments([sf_job], PROFILE)
+    assert len(updated) == 1
+    assert updated[0]["fit_score"] == 85
+    assert updated[0]["fit_rationale"] == "Strong match"
+
+
+def test_reapply_adjustments_migrates_legacy_bay_area_suffix():
+    legacy_job = {
+        **POSTING,
+        "location": "San Francisco, CA",
+        "fit_score": 93,
+        "fit_rationale": "Strong match (Bay Area location boost: +8)",
+    }
+    updated = reapply_adjustments([legacy_job], LOCATION_PROFILE)
+    assert len(updated) == 1
+    assert updated[0]["fit_score"] == 93
+    assert updated[0]["fit_rationale"] == "Strong match (Priority location boost: +8)"
+
+
+def test_reapply_adjustments_recalculates_after_boost_amount_changes():
+    sf_job = {
+        **POSTING,
+        "location": "San Francisco, CA",
+        "fit_score": 93,
+        "fit_rationale": "Strong match (Priority location boost: +8)",
+    }
+    bigger_boost_profile = {**LOCATION_PROFILE, "locations": {**LOCATION_PROFILE["locations"], "priority_location_boost": 15}}
+    updated = reapply_adjustments([sf_job], bigger_boost_profile)
+    assert len(updated) == 1
+    assert updated[0]["fit_score"] == 100
+    assert "Priority location boost: +15" in updated[0]["fit_rationale"]
+
+
+def test_reapply_adjustments_skips_jobs_without_a_score():
+    unscored = [{**POSTING, "fit_score": None, "fit_rationale": None}]
+    assert reapply_adjustments(unscored, LOCATION_PROFILE) == []

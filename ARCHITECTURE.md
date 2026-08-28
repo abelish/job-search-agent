@@ -79,7 +79,7 @@ one contains pipeline logic of its own.
 | Path | Responsibility |
 |---|---|
 | `agents/aggregator/` | Fetches and normalizes postings from every source into one schema. Also handles best-effort scraping for manually-added URLs (`fetch_manual_url`, `normalize_manual_posting`). |
-| `agents/scorer/` | `passes_hard_filters` (deterministic pre-filter), `score_posting`/`score_all` (Claude scoring + Bay Area/seniority adjustment), `reapply_adjustments` (re-derive adjusted scores without a Claude call, used by `jobsearch readjust` after the adjustment logic itself changes). |
+| `agents/scorer/` | `hard_filter_reason`/`passes_hard_filters` (deterministic pre-filter), `score_posting`/`score_all` (Claude scoring + an optional, profile-configured location/seniority adjustment), `reapply_adjustments` (re-derive adjusted scores without a Claude call, used by `jobsearch readjust` after the profile's adjustment config changes). |
 | `agents/resume_tailor/` | `tailor_resume` (initial draft), `revise_resume` (chat-based iteration on an existing draft). |
 | `agents/cover_letter/` | `draft_cover_letter`, `revise_cover_letter` — same shape as resume_tailor. |
 | `agents/interview_prep/` | `generate_prep_brief` — company brief + likely questions + talking points. |
@@ -97,17 +97,18 @@ one contains pipeline logic of its own.
 
 ### `jobs`
 
-The source of truth for every posting the system has seen (that passed the hard filter) and every
-application's state.
+The source of truth for every posting the system has seen and every application's state. Scanned
+postings that fail the hard filter are never stored at all; manually-added postings are stored
+regardless, and can still land in `filtered` once you run Score.
 
 | Column | Notes |
 |---|---|
-| `id` | Primary key, `sha1(source + url)[:12]` |
+| `id` | Primary key, `sha1(source + url)[:12]` — or a random 12 hex chars for a manually-added posting with no URL |
 | `source` | `greenhouse` \| `lever` \| `ashby` \| `smartrecruiters` \| `arbeitsagentur` \| `linkedin_email` \| `indeed_email` \| `manual` |
 | `title`, `company`, `location`, `url`, `description` | Normalized posting fields |
 | `posted_date`, `fetched_date` | ISO 8601 |
-| `fit_score`, `fit_rationale` | Set by the scorer; `fit_score` includes the Bay Area/seniority adjustment |
-| `status` | `new` → `scored` → `drafted` → `submitted` → `interviewing` → `rejected` \| `offer`, or `dismissed` at any point |
+| `fit_score`, `fit_rationale` | Set by the scorer; `fit_score` includes the location/seniority adjustment when the profile configures one. `filtered` postings have `fit_score = NULL` and a rationale explaining which hard filter rejected them. |
+| `status` | `new` → `scored` → `drafted` → `submitted` → `interviewing` → `rejected` \| `offer`, or `dismissed`/`filtered` at any point |
 | `resume_draft`, `cover_letter_draft` | Current draft text, editable in place |
 | `resume_chat`, `cover_letter_chat` | JSON array of `{role, content, created_at}` — the iteration history behind each draft |
 | `prep_brief` | Set once, when status reaches `interviewing` |
@@ -152,12 +153,21 @@ except through `agents/claude_client.py`. This is what makes each one independen
 - **Aggregator normalized posting schema** — every source, however different its native API, is
   reduced to `{id, source, title, company, location, url, description, posted_date, fetched_date}`
   before it touches anything else in the system.
-- **Scorer** — `passes_hard_filters(posting, profile) -> bool` is pure and synchronous. `score_all`
-  additionally applies two deterministic adjustments on top of Claude's raw score: a +8 point boost
-  for Bay Area locations, and a 10-15 point penalty for manager-level (not director+) titles located
-  outside the Bay Area, since those rarely clear the candidate's comp floor without a relocation
-  premium. `reapply_adjustments` strips and reapplies these adjustments from already-scored jobs
-  without another Claude call, for when the adjustment thresholds themselves change.
+- **Scorer** — `hard_filter_reason(posting, profile) -> str | None` is pure and synchronous;
+  `passes_hard_filters` is a bool wrapper around it. Postings that fail it during `score_all` never
+  reach Claude — they come back with `fit_score = None` and a rationale naming the specific filter
+  that rejected them. On top of Claude's raw score, `score_all` optionally applies a deterministic
+  location adjustment, entirely driven by `profile.json["locations"]`: a `priority_location_boost`
+  for postings matching `priority_location_terms`, and a `non_priority_manager_penalty` for
+  manager-level (not director+) titles that don't match, since those often can't clear the
+  candidate's comp floor without a relocation premium. All three default to off, so a profile that
+  doesn't set them gets no location-based scoring bias — this used to be a hardcoded Bay Area bias
+  baked into the prompt and code; it's now opt-in, per-candidate config instead. `reapply_adjustments`
+  strips and reapplies the adjustment on already-scored jobs without another Claude call, for when
+  that config changes (`jobsearch readjust`). Industry/mission fit (`profile.json["industry_preferences"]`)
+  is handled differently: since "what industry is this company in" isn't structured data on the
+  posting, it's passed into the prompt as favor/avoid lists and left to Claude's judgment rather
+  than computed deterministically, unlike the location adjustment above.
 - **Resume tailor / cover letter** — hard constraint enforced in the prompt: never invent a skill,
   title, or achievement not already present in the base resume/profile. `revise_*` takes the current
   draft plus a free-text instruction and returns a `<reply>` (shown in the chat panel) and a
@@ -221,10 +231,11 @@ causes `aggregator.run_all()` to skip that source when unset.
 ## Design decisions worth knowing
 
 - **Deterministic work stays out of Claude.** Parsing, API calls, DB writes, the hard filter, and
-  the Bay Area/seniority score adjustment are all plain Python. Claude is called only where the task
-  genuinely needs language judgment: the fit rationale, tailoring, drafting, prep. This keeps most
-  of the system free of charge and fast, and keeps the parts that do call Claude easy to reason
-  about in isolation.
+  the location/seniority score adjustment are all plain Python, driven entirely by `profile.json`
+  rather than baked into the prompt. Claude is called only where the task genuinely needs language
+  judgment: the fit rationale, tailoring, drafting, prep. This keeps most of the system free of
+  charge and fast, keeps the parts that do call Claude easy to reason about in isolation, and keeps
+  candidate-specific bias visible and editable instead of hidden in a shared prompt template.
 - **No auto-submit, anywhere.** Drafts are written to the DB and rendered in the dashboard for the
   candidate to review, edit, and submit by hand on the company's own site. This is a hard boundary,
   not a missing feature — automating submission would violate LinkedIn/Indeed terms of service and

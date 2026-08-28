@@ -16,10 +16,18 @@ just `jobsearch` after `pip install -e .`.
 """
 
 import json
+import sys
 import click
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Windows consoles default to a codepage (e.g. cp1252) that can't encode every
+# character a scraped job title/location might contain. Without this, printing
+# one crashes the whole command instead of just garbling that one character.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
 
 from agents import aggregator, scorer, resume_tailor, cover_letter, interview_prep
 from tracker import init_db, upsert_job, update_status, update_fit_score, get_job, list_jobs, log_activity, get_scan_dedup_keys
@@ -158,18 +166,20 @@ def prep(job_id):
 def readjust():
     """Re-apply score adjustments to already-scored jobs without calling Claude.
 
-    Strips any existing Bay Area boost or manager-level penalty from each
+    Strips any existing location boost or manager-level penalty from each
     scored job's rationale, recovers the raw Claude score, then re-applies
-    current adjustment logic. Only jobs whose score or rationale changes
-    are written back to the database.
+    the profile's current locations.priority_location_terms/boost/penalty
+    config. Only jobs whose score or rationale changes are written back to
+    the database. Run this after editing that config in profile.json.
     """
+    profile = load_profile()
     all_jobs = list_jobs()
     scored = [j for j in all_jobs if j.get("fit_score") is not None]
     if not scored:
         click.echo("No scored jobs found.")
         return
 
-    updated = scorer.reapply_adjustments(scored)
+    updated = scorer.reapply_adjustments(scored, profile)
     for job in updated:
         update_fit_score(job["id"], job["fit_score"], job["fit_rationale"])
         click.echo(f"  {job['company']} - {job['title']} ({job['location']}): score -> {job['fit_score']}")
